@@ -106,10 +106,12 @@ LambdaANF/uncurry.v
 LambdaANF/uncurry_rel.v
 LambdaANF/uncurry_proto.v
 LambdaANF/uncurry_correct.v
+LambdaANF/non_local_uncurry.v
 LambdaANF/lambda_lifting.v
 LambdaANF/dead_param_elim.v
 LambdaANF/dead_param_elim_util.v
 LambdaANF/dead_param_elim_correct.v
+LambdaANF/non_local_dead_param_elim.v
 LambdaANF/freshen.v
 LambdaANF/lambda_lifting_util.v
 LambdaANF/lambda_lifting_correct.v
