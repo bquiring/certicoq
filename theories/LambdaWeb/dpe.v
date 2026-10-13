@@ -14,7 +14,7 @@ From Stdlib Require Import NArith.BinNat ZArith.ZArith Lists.List Sets.Ensembles
 Require Import compcert.lib.Coqlib.
 From CertiRocq.LambdaANF Require Import Ensembles_util List_util tactics algebra set_util.
 From CertiRocq.LambdaANF Require term term_util.
-From CertiRocq.LambdaWeb Require Import syntax semantics exposed post compat indep.
+From CertiRocq.LambdaWeb Require Import syntax semantics exposed post compat dead indep comp bound.
 
 Import ListNotations.
 
@@ -85,63 +85,86 @@ Section DPE_spec.
 
   Variable (L : M.t (list bool)).
 
-  Inductive trans : exp -> exp -> Prop :=
+  (** [Gb] bounds the number of dead bindings removed on any path of a
+      function body (between two calls); it is the [G] of CertiRocq's
+      [inline_bound L G].  The index [n] of [trans n e e'] bounds the number
+      of dead bindings removed on any path of [e]. *)
+  Variable (Gb : nat).
+
+  Inductive trans : nat -> exp -> exp -> Prop :=
   | Trans_constr :
-      forall x w t ys e e',
-        trans e e' ->
-        trans (Econstr x w t ys e) (Econstr x w t ys e')
+      forall n x w t ys e e',
+        trans n e e' ->
+        trans n (Econstr x w t ys e) (Econstr x w t ys e')
   | Trans_proj :
-      forall x w t n y e e',
-        trans e e' ->
-        trans (Eproj x w t n y e) (Eproj x w t n y e')
+      forall n x w t i y e e',
+        trans n e e' ->
+        trans n (Eproj x w t i y e) (Eproj x w t i y e')
   | Trans_case_nil :
-      forall x w,
-        trans (Ecase x w []) (Ecase x w [])
+      forall n x w,
+        trans n (Ecase x w []) (Ecase x w [])
   | Trans_case_cons :
-      forall x w c e e' cl cl',
-        trans e e' ->
-        trans (Ecase x w cl) (Ecase x w cl') ->
-        trans (Ecase x w ((c, e) :: cl)) (Ecase x w ((c, e') :: cl'))
+      forall n x w c e e' cl cl',
+        trans n e e' ->
+        trans n (Ecase x w cl) (Ecase x w cl') ->
+        trans n (Ecase x w ((c, e) :: cl)) (Ecase x w ((c, e') :: cl'))
   | Trans_letapp_exposed :
-      forall x f w ys e e',
+      forall n x f w ys e e',
         exposedb w = true ->
-        trans e e' ->
-        trans (Eletapp x f w ys e) (Eletapp x f w ys e')
+        trans n e e' ->
+        trans n (Eletapp x f w ys e) (Eletapp x f w ys e')
   | Trans_letapp :
-      forall x f w ys e e' bs,
+      forall n x f w ys e e' bs,
         exposedb w = false ->
         L ! w = Some bs ->
-        trans e e' ->
-        trans (Eletapp x f w ys e) (Eletapp x f w (live_args ys bs) e')
+        trans n e e' ->
+        trans n (Eletapp x f w ys e) (Eletapp x f w (live_args ys bs) e')
   | Trans_app_exposed :
-      forall f w ys,
+      forall n f w ys,
         exposedb w = true ->
-        trans (Eapp f w ys) (Eapp f w ys)
+        trans n (Eapp f w ys) (Eapp f w ys)
   | Trans_app :
-      forall f w ys bs,
+      forall n f w ys bs,
         exposedb w = false ->
         L ! w = Some bs ->
-        trans (Eapp f w ys) (Eapp f w (live_args ys bs))
+        trans n (Eapp f w ys) (Eapp f w (live_args ys bs))
   | Trans_fun :
-      forall B B' e e',
+      forall n B B' e e',
         trans_fundefs B B' ->
-        trans e e' ->
-        trans (Efun B e) (Efun B' e')
+        trans n e e' ->
+        trans n (Efun B e) (Efun B' e')
   | Trans_prim_val :
-      forall x p e,
-        trans (Eprim_val x p e) (Eprim_val x p e)
+      forall n x p e,
+        trans n (Eprim_val x p e) (Eprim_val x p e)
   | Trans_prim :
-      forall x p ys e,
-        trans (Eprim x p ys e) (Eprim x p ys e)
+      forall n x p ys e,
+        trans n (Eprim x p ys e) (Eprim x p ys e)
   | Trans_halt :
-      forall x,
-        trans (Ehalt x) (Ehalt x)
+      forall n x,
+        trans n (Ehalt x) (Ehalt x)
+  (* dead local bindings: the bound variables do not occur in the
+     transformed continuation *)
+  | Trans_dead_constr :
+      forall n m x w t ys e e',
+        trans n e e' -> n < m ->
+        ~ occurs_free e' x ->
+        trans m (Econstr x w t ys e) e'
+  | Trans_dead_proj :
+      forall n m x w t i y e e',
+        trans n e e' -> n < m ->
+        ~ occurs_free e' x ->
+        trans m (Eproj x w t i y e) e'
+  | Trans_dead_fun :
+      forall n m B e e',
+        trans n e e' -> n < m ->
+        Disjoint _ (name_in_fundefs B) (occurs_free e') ->
+        trans m (Efun B e) e'
   with trans_fundefs : fundefs -> fundefs -> Prop :=
   | Trans_Fnil : trans_fundefs Fnil Fnil
   | Trans_Fcons_exposed :
       forall f w xs e e' B B',
         exposedb w = true ->
-        trans e e' ->
+        trans Gb e e' ->
         trans_fundefs B B' ->
         trans_fundefs (Fcons f w xs e B) (Fcons f w xs e' B')
   | Trans_Fcons :
@@ -149,7 +172,7 @@ Section DPE_spec.
         exposedb w = false ->
         L ! w = Some bs ->
         length bs = length xs ->
-        trans e e' ->
+        trans Gb e e' ->
         (* dead parameters do not occur in the transformed body *)
         Disjoint _ (FromList (dead_args xs bs)) (occurs_free e') ->
         trans_fundefs B B' ->
@@ -181,7 +204,7 @@ Section DPE_spec.
     trans_fundefs B B' ->
     find_def f B = Some (w, xs, e) ->
     exists e',
-      trans e e' /\
+      trans Gb e e' /\
       ((exposedb w = true /\ find_def f B' = Some (w, xs, e')) \/
        (exists bs, exposedb w = false /\ L ! w = Some bs /\ length bs = length xs /\
                    Disjoint _ (FromList (dead_args xs bs)) (occurs_free e') /\
@@ -193,14 +216,21 @@ Section DPE_spec.
     - inv Hfn. eexists; split; eauto. right. eexists; eauto 10.
   Qed.
 
-  Lemma trans_case_tags x w cl cl' :
-    trans (Ecase x w cl) (Ecase x w cl') -> Forall2 (fun p p' => fst p = fst p') cl cl'.
+  Lemma trans_case_tags n x w cl cl' :
+    trans n (Ecase x w cl) (Ecase x w cl') -> Forall2 (fun p p' => fst p = fst p') cl cl'.
   Proof.
     revert cl'. induction cl as [| [c e] cl IH]; intros cl' H; inv H; constructor; eauto.
   Qed.
 
+  (** The removal budget can always be enlarged. *)
+  Lemma trans_weaken n m e e' : trans n e e' -> n <= m -> trans m e e'.
+  Proof.
+    intros H; revert m; induction H; intros m' Hle;
+      solve [ econstructor; eauto; lia ].
+  Qed.
+
   Lemma trans_occurs_free :
-    (forall e e', trans e e' -> occurs_free e' \subset occurs_free e) /\
+    (forall n e e', trans n e e' -> occurs_free e' \subset occurs_free e) /\
     (forall B B', trans_fundefs B B' -> occurs_free_fundefs B' \subset occurs_free_fundefs B).
   Proof.
     apply trans_mutind; intros; normalize_occurs_free.
@@ -209,6 +239,16 @@ Section DPE_spec.
                     rewrite <- (trans_fundefs_names_eq _ _ Ht)
                 end.
     all: try solve [ sets ].
+    (* dead bindings *)
+    all: try solve [ match goal with
+             | [ Hb : occurs_free ?e' \subset occurs_free _ |- occurs_free ?e' \subset _ ] =>
+                 intros z Hz; right; constructor; [ eapply Hb; exact Hz | intros Hc ];
+                 first [ inv Hc; contradiction
+                       | match goal with
+                         | [ Hd : Disjoint _ (name_in_fundefs _) (occurs_free e') |- _ ] =>
+                             eapply Hd; constructor; eassumption
+                         end ]
+             end ].
     - eapply Included_Union_compat.
       + eapply Included_Union_compat; [ reflexivity | eapply FromList_live_args ].
       + eapply Included_Setminus_compat; [ eassumption | reflexivity ].
@@ -240,7 +280,7 @@ Section DPE_rel.
   Local Notation PostGT := (@exposed.PostGT fuel trace).
   Local Notation VTransT := (@exposed.VTransT fuel trace).
 
-  Variable (L : M.t (list bool)).
+  Variables (L : M.t (list bool)) (Gb : nat).
 
   (** Internal closures: calling the source closure on any arguments is
       related to calling the target closure on the live arguments.  Dead
@@ -285,10 +325,7 @@ Section DPE_rel.
       eexists; split; eauto. intros Hlt. eapply Hb. lia.
   Qed.
 
-  Context (P : PostT) (PG : PostGT) {Hprops : Post_properties cenv P P PG}.
-
-  Lemma P_PG : inclusion _ P PG.
-  Proof. destruct Hprops; assumption. Qed.
+  Context (PG : PostGT).
 
   Notation V := (V cenv VT_dpe PG).
   Notation E := (E cenv VT_dpe PG).
@@ -344,7 +381,7 @@ Section DPE_rel.
 
   (** ** Compatibility lemmas for internal calls *)
 
-  Lemma E_app_dpe ex k rho1 rho2 f w ys bs
+  Lemma E_app_dpe (P : PostT) ex k rho1 rho2 f w ys bs
         (Hcompat : post_app_compat' f w ys rho1 f w (live_args ys bs) rho2 P PG)
         (HOOT : post_OOT' (Eapp f w ys) rho1 (Eapp f w (live_args ys bs)) rho2 P) :
     exposedb w = false ->
@@ -378,7 +415,7 @@ Section DPE_rel.
         * eapply (R_mono cenv VT_dpe); eauto. fuel_arith.
   Qed.
 
-  Lemma E_letapp_dpe ex k rho1 rho2 x f w ys bs e1 e2
+  Lemma E_letapp_dpe (P : PostT) ex k rho1 rho2 x f w ys bs e1 e2
         (Hcompat : post_letapp_compat' cenv x f w ys e1 rho1 x f w (live_args ys bs) e2 rho2 P P PG)
         (HcompatOOT : post_letapp_compat_OOT' x f w ys e1 rho1 x f w (live_args ys bs) e2 rho2 P PG)
         (HOOT : post_OOT' (Eletapp x f w ys e1) rho1 (Eletapp x f w (live_args ys bs) e2) rho2 P) :
@@ -431,17 +468,39 @@ Section DPE_rel.
           -- exact I.
   Qed.
 
+  (** ** Postconditions *)
+
+  (** [P n] relates expressions from which at most [n] dead bindings are
+      removed on any path (see [Post_dead]). *)
+  Context (P : nat -> PostT) {Hdead : Post_dead cenv P PG Gb}.
+
+  Lemma Hprops_n n : n <= Gb -> Post_properties cenv (P n) (P n) PG.
+  Proof. destruct Hdead as [H _ _]. eauto. Qed.
+
+  Lemma P_PG : inclusion _ (P Gb) PG.
+  Proof. destruct (Hprops_n Gb (le_n _)); assumption. Qed.
+
+  Lemma P_mono n m : n <= m -> m <= Gb -> inclusion _ (P n) (P m).
+  Proof. destruct Hdead as [_ H _]. eauto. Qed.
+
+  Lemma P_src n : n < Gb -> post_source_step (P n) (P (S n)).
+  Proof. destruct Hdead as [_ _ H]. eauto. Qed.
+
+  Lemma P_OOT n : n <= Gb -> post_OOT (P n).
+  Proof. intros Hn. destruct (Hprops_n n Hn); assumption. Qed.
+
   (** ** Closures of transformed bundles *)
 
   Definition IH_exp k :=
-    forall m ex e e' rho1 rho2,
+    forall m n ex e e' rho1 rho2,
       m < k ->
-      trans L e e' ->
+      n <= Gb ->
+      trans L Gb n e e' ->
       G m (occurs_free e') rho1 rho2 ->
-      E P ex m (e, rho1) (e', rho2).
+      E (P n) ex m (e, rho1) (e', rho2).
 
   Lemma Vfun_dpe k rho1 rho2 B B' :
-    trans_fundefs L B B' ->
+    trans_fundefs L Gb B B' ->
     IH_exp k ->
     G k (occurs_free_fundefs B') rho1 rho2 ->
     forall f, name_in_fundefs B f -> V k (Vfun rho1 B f) (Vfun rho2 B' f).
@@ -450,7 +509,7 @@ Section DPE_rel.
     assert (Hdefs : forall j, j < k -> forall g, name_in_fundefs B g ->
                                       V j (Vfun rho1 B g) (Vfun rho2 B' g)).
     { intros j Hlt g Hg. eapply IHk; eauto.
-      - intros m ex e e' r1 r2 Hm. eapply Hexp. lia.
+      - intros m n ex e e' r1 r2 Hm. eapply Hexp. lia.
       - eapply (G_mono cenv VT_dpe); eauto. lia. }
     assert (Henv : forall j xs xs' vs1 vs2 rho1' rho2' S,
                j < k ->
@@ -507,16 +566,17 @@ Section DPE_rel.
 
   (** ** Fundamental property *)
 
-  Lemma fundamental k ex e e' rho1 rho2 :
-    trans L e e' ->
+  Lemma fundamental k n ex e e' rho1 rho2 :
+    n <= Gb ->
+    trans L Gb n e e' ->
     G k (occurs_free e') rho1 rho2 ->
-    E P ex k (e, rho1) (e', rho2).
+    E (P n) ex k (e, rho1) (e', rho2).
   Proof.
-    revert ex e e' rho1 rho2.
+    revert n ex e e' rho1 rho2.
     induction k as [k IH] using lt_wf_rec.
-    assert (IH' : IH_exp k) by (intros m ex e e' r1 r2 Hlt; eapply IH; eauto).
-    intros ex e e' rho1 rho2 Htrans. revert ex rho1 rho2.
-    induction Htrans; intros ex rho1 rho2 HG; pose proof Hprops as Hprops'; destruct Hprops'.
+    assert (IH' : IH_exp k) by (intros m n ex e e' r1 r2 Hlt; eapply IH; eauto).
+    intros n ex e e' rho1 rho2 HnG Htrans. revert ex rho1 rho2 HnG.
+    induction Htrans; intros ex rho1 rho2 HnG HG; pose proof (Hprops_n _ HnG) as Hprops'; destruct Hprops'.
     - (* Econstr *)
       eapply (E_constr_compat cenv VT_dpe); eauto.
       + eapply (G_Forall2_var_rel cenv VT_dpe); eauto. normalize_occurs_free. sets.
@@ -567,14 +627,14 @@ Section DPE_rel.
     - (* Efun *)
       eapply (E_fun_compat cenv VT_dpe); eauto.
       eapply (E_mono cenv VT_dpe) with (k := k); [| lia ].
-      eapply IHHtrans.
+      eapply IHHtrans; [ exact HnG |].
       eapply (G_antimon cenv VT_dpe); [| eapply occurs_free_Efun_Included ].
       eapply (G_def_funs cenv VT_dpe).
       + eapply (G_antimon cenv VT_dpe); eauto.
         intros z [Hz Hn]. destruct Hz as [z Hz | z Hz]; [ exact Hz |].
         exfalso; apply Hn.
         match goal with
-        | [ HB : trans_fundefs _ _ _ |- _ ] => apply (proj2 (trans_fundefs_names _ _ _ HB z)); exact Hz
+        | [ HB : trans_fundefs _ _ _ _ |- _ ] => apply (proj2 (trans_fundefs_names _ _ _ _ HB z)); exact Hz
         end.
       + eapply HG.
       + eapply HG.
@@ -588,19 +648,60 @@ Section DPE_rel.
     - (* Ehalt *)
       eapply (E_halt_compat cenv VT_dpe); eauto.
       eapply (G_var_rel cenv VT_dpe); eauto. fv_mem.
+    - (* dead Econstr *)
+      eapply (E_post_mono cenv VT_dpe); [ eapply (P_mono (S n)); lia |].
+      eapply (E_dead_constr cenv VT_dpe); [ eapply P_src; lia | eapply P_OOT; lia | eapply HG |].
+      intros vs _ Hv. eapply IHHtrans; [ lia |]. eapply (G_set_l_not_in cenv VT_dpe); eauto.
+    - (* dead Eproj *)
+      eapply (E_post_mono cenv VT_dpe); [ eapply (P_mono (S n)); lia |].
+      eapply (E_dead_proj cenv VT_dpe); [ eapply P_src; lia | eapply P_OOT; lia | eapply HG |].
+      intros v Hv. eapply IHHtrans; [ lia |]. eapply (G_set_l_not_in cenv VT_dpe); eauto.
+    - (* dead Efun *)
+      eapply (E_post_mono cenv VT_dpe); [ eapply (P_mono (S n)); lia |].
+      eapply (E_dead_fun cenv VT_dpe); [ eapply P_src; lia | eapply P_OOT; lia |].
+      eapply IHHtrans; [ lia |]. eapply (G_def_funs_l_not_in cenv VT_dpe); eauto. eapply HG.
   Qed.
 
   (** ** Top level *)
 
-  Lemma E_top_dpe e e' : trans L e e' -> E_top cenv VT_dpe P PG e e'.
+  Lemma E_top_dpe n e e' : n <= Gb -> trans L Gb n e e' -> E_top cenv VT_dpe (P n) PG e e'.
   Proof.
-    intros Htrans k rho1 rho2 [HG _] Hbind. eapply fundamental; eauto.
+    intros Hn Htrans k rho1 rho2 [HG _] Hbind. eapply fundamental; eauto.
     eapply (G_antimon cenv VT_dpe); eauto. eapply trans_occurs_free; eauto.
   Qed.
 
-  (** Theorem 5.4 for DPE: the transformed program is related to the
-      original one by the λweb relation. *)
-  Theorem E_web_dpe e e' : trans L e e' -> E_web cenv P PG e e'.
-  Proof. intros Htrans. exact (E_top_E_web cenv VT_dpe P PG e e' (E_top_dpe e e' Htrans)). Qed.
+  (** Theorem 5.4 for DPE with dead-binding elimination: the transformed
+      program is related to the original one by the λweb relation. *)
+  Theorem E_web_dpe_dead n e e' : n <= Gb -> trans L Gb n e e' -> E_web cenv (P n) PG e e'.
+  Proof.
+    intros Hn Htrans. exact (E_top_E_web cenv VT_dpe (P n) PG e e' (E_top_dpe n e e' Hn Htrans)).
+  Qed.
 
 End DPE_rel.
+
+(** * DPE without dead bindings, for any postcondition *)
+
+Theorem E_web_dpe {fuel : Type} {Hf : @fuel_resource fuel} {trace : Type} {Ht : @trace_resource trace}
+        cenv L (P : @exposed.PostT fuel trace) PG {Hprops : Post_properties cenv P P PG} e e' :
+  trans L 0 0 e e' -> E_web cenv P PG e e'.
+Proof.
+  intros Htrans. eapply (E_web_dpe_dead cenv L 0 PG (fun _ => P) 0 e e'); eauto.
+Qed.
+
+(** * Refinement, with divergence preservation *)
+
+Section DPE_top.
+
+  Variables (cenv : term.ctor_env) (L : M.t (list bool)) (Gb : nat).
+
+  (** With [dead_bound], the source takes at most [Gb] more steps per call
+      than the target, so the target diverges whenever the source does. *)
+  Theorem dpe_refines n e e' :
+    closed_exp e -> n <= Gb -> trans L Gb n e e' -> refines cenv value_ref e e'.
+  Proof.
+    intros Hc Hn Htr.
+    eapply (E_web_refines cenv (dead_bound n Gb) (dead_bound Gb Gb) (dead_bound_upper_bound n Gb)); eauto.
+    eapply (E_web_dpe_dead cenv L Gb (dead_bound Gb Gb) (fun n => dead_bound n Gb)); eauto.
+  Qed.
+
+End DPE_top.

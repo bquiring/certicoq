@@ -26,11 +26,14 @@ relation (`anno.v`) and assumed in `pipeline.v`.
 | `syntax.v` | λweb syntax and values, the abstract exposed webs, exposed and well-formed values, erasure to λANF, free variables (inherited through erasure) | Fig. 3, Fig. 4 (top) |
 | `semantics.v` | Fuel/trace big-step semantics with web and exposure checks; determinism, fuel lemmas, preservation of well-formedness | Fig. 4, Lemma 4.1 |
 | `exposed.v` | The parameterized relations `V`/`E`/`R`/`G` over a transformation-specific relation `VT` for internal closures; monotonicity; environments of mutually recursive bundles | Fig. 5 |
-| `post.v` | λweb versions of CertiRocq's postcondition obligations; `P_ge` (target fuel ≥ source fuel), which tolerates target-only steps | — |
+| `post.v` | λweb versions of CertiRocq's postcondition obligations; `P_ge` (target fuel ≥ source fuel); obligations for removed source / inserted target binding steps and the `Post_dead` families | — |
 | `compat.v` | Generic compatibility lemmas (one per form) | §5.1 "Mechanization details" |
+| `dead.v` | Compatibility lemmas for binding steps taken by one side only (dead `Econstr`/`Eproj`/`Efun` in the source, inserted constants in the target) | — |
+| `bound.v` | `dead_bound L G`, the λweb counterpart of CertiRocq's `inline_bound`: a `Post_dead` family with an upper bound (divergence preservation) | — |
 | `indep.v` | Exposed values do not depend on `VT`; top-level relations; any instantiation implies the λweb relation | Thm 5.1, Cor 5.2 |
 | `refl.v` | Identity instantiation, fundamental property, reflexivity of the λweb relation | — |
-| `dpe.v` | Flow-directed dead-parameter elimination over mutually recursive bundles | §6.1, Fig. 6, Thms 5.3/5.4 |
+| `dpe.v` | Flow-directed dead-parameter elimination over mutually recursive bundles, also dropping dead local bindings | §6.1, Fig. 6, Thms 5.3/5.4 |
+| `cp.v` | Flow-directed constant propagation with locally bound constants (and constant parameters), dropping dead local bindings | §6.2, Fig. 7 |
 | `defunc.v` | MLton-style defunctionalization: lifts functions of internal bundles to top-level code functions, represents each closure as a record whose tag is drawn from its lambda set, and dispatches calls by `Ecase`; correctness and refinement (incl. divergence) | §6.3 |
 | `comp.v` | Transitive closure, adequacy and linking for λweb | §7.3, Lemmas 7.5, 7.6 |
 | `erase.v` | Cross-language erasure relation λweb → λANF; `erase` is correct; adequacy; linking | §7.4, Fig. 11, Lemmas 7.7, 7.8 |
@@ -38,7 +41,8 @@ relation (`anno.v`) and assumed in `pipeline.v`.
 | `pipeline.v` | Composition with CertiRocq's `preord_exp_n`: refinement and linking for the whole pipeline; a compiler built from correct phases is correct | §7.5, Lemmas 7.10, 7.11 |
 
 Main results: `V_exposed_indep`, `E_top_E_web` (indep.v), `E_web_refl`
-(refl.v), `E_web_dpe` (dpe.v), `web_exp_n_refines`,
+(refl.v), `E_web_dpe`, `E_web_dpe_dead`, `dpe_refines` (dpe.v), `E_web_cp`,
+`cp_refines` (cp.v), `web_exp_n_refines`,
 `web_exp_n_preserves_linking` (comp.v), `erase_correct`, `E_erase_refines`,
 `E_erase_preserves_linking` (erase.v), `E_anno_refines`,
 `E_anno_preserves_linking` (anno.v), `dfn_correct`, `dfn_refines` (defunc.v), `pipeline_refines`,
@@ -86,7 +90,6 @@ make LambdaWeb/pipeline.vo LambdaWeb/dpe.vo
 
 ## Not ported yet
 
-* Constant propagation (paper §6.2).
 * Composing defunctionalization with `web_exp_n` (`preserves_fv`): it would
   need the code bodies of `Btop` to be closed.
 * A flow analysis inhabiting the annotation relation (the pipeline assumes
@@ -111,3 +114,32 @@ Restrictions:
 The proof holds for any postcondition insensitive to extra target steps
 (`post_target_steps`); `P_ge` is the instance used by `dfn_refines`, which
 gives termination and divergence preservation for closed programs.
+
+## Dead bindings and constants (`dpe.v`, `cp.v`)
+
+Both relations are indexed by a budget `n`, the number of dead bindings that
+may be removed on a path of the expression before the next call
+(`trans … n e e'`; `trans_weaken` enlarges it), and by `Gb`, the budget of
+function bodies.  A binding `Econstr x …`, `Eproj x …` or `Efun B …` may be
+dropped when its variables do not occur in the *transformed* continuation,
+so bindings made dead by the transformation itself (an argument that DPE or
+constant propagation stopped passing) are removed too.
+
+Removed source steps are accounted for by a family of postconditions
+`P : nat -> PostT` (`Post_dead`, post.v): `P n` must satisfy the usual
+obligations and absorb one removed step into `P (S n)`, and bodies are
+checked against `P Gb ⊆ PG`.  This is the structure of CertiRocq's
+`inline_bound L G`.  `dead_bound n Gb` (bound.v), which bounds source fuel by
+`target fuel + Gb·calls + n`, is an instance with an upper bound, so
+`dpe_refines` and `cp_refines` preserve divergence.  For any single
+postcondition, `E_web_dpe` covers DPE without dead bindings (`Gb = n = 0`).
+
+Constant propagation (`cp.v`) tracks a scoped constant environment `K`.
+`Econstr x w c [] e` records `x ↦ (c, w)`, also when the binding is dropped,
+and other binders of `x` forget it.  A constant parameter of an internal
+function is recorded in its body, so recursive calls can pass it on.
+`Lc` maps an internal web to its parameters' constants.  Calls drop the
+constant arguments, which must be recorded in `K`.  Functions drop the
+corresponding parameters (they must be distinct) and rebind them on entry
+(`bind_consts`): these are inserted target steps, so `P Gb` must satisfy
+`post_target_step`.

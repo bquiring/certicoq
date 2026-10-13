@@ -86,6 +86,35 @@ Section Compat.
         * eapply R_mono; eauto. fuel_arith.
   Qed.
 
+  (** The same, where the continuation knows the source value. *)
+  Lemma E_constr_compat_vals ex k rho1 rho2 x x' w t ys1 ys2 e1 e2
+        (Hcompat : post_constr_compat' x w t ys1 e1 rho1 x' w t ys2 e2 rho2 P1 P2)
+        (HOOT : post_OOT' (Econstr x w t ys1 e1) rho1 (Econstr x' w t ys2 e2) rho2 P2) :
+    Forall2 (var_rel k rho1 rho2) ys1 ys2 ->
+    (forall m vs1 v2,
+        m < k ->
+        get_list ys1 rho1 = Some vs1 ->
+        V m (Vconstr w t vs1) v2 ->
+        E P1 ex m (e1, M.set x (Vconstr w t vs1) rho1) (e2, M.set x' v2 rho2)) ->
+    E P2 ex k (Econstr x w t ys1 e1, rho1) (Econstr x' w t ys2 e2, rho2).
+  Proof.
+    intros Hall Hk r1 cin cout Hleq Hstep. inv Hstep.
+    - exists OOT, cin, <0>. split; [ constructor; eassumption |].
+      split; [ eapply HOOT; eassumption | exact I ].
+    - inv H.
+      edestruct var_rel_get_list as (vs2 & Hget2 & Hvs); eauto.
+      edestruct (Hk (k - 1)) as (r2 & cin' & cout' & Hstep2 & Hpost & HR);
+        [ fuel_arith | eassumption | | | eassumption | ].
+      + eapply V_Vconstr; eauto. eapply V_mono_Forall2; eauto. lia.
+      + fuel_arith.
+      + do 3 eexists. split; [| split ].
+        * econstructor 2; [ econstructor; eauto |].
+          -- eapply Forall2_V_exposed_imp; eauto.
+          -- eapply R_exposed_ex; eauto.
+        * eapply Hcompat; eauto.
+        * eapply R_mono; eauto. fuel_arith.
+  Qed.
+
   (** * Projections *)
 
   Lemma E_proj_compat ex k rho1 rho2 x x' w t n y1 y2 e1 e2

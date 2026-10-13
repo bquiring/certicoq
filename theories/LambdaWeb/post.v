@@ -7,7 +7,7 @@
    λweb versions of the side conditions of LambdaANF/logical_relations.v
    ([post_constr_compat], ..., [Post_properties]). *)
 
-From Stdlib Require Import NArith.BinNat ZArith.ZArith Lists.List Sets.Ensembles Relations.Relations.
+From Stdlib Require Import NArith.BinNat ZArith.ZArith Lists.List Sets.Ensembles Relations.Relations micromega.Lia.
 Require Import compcert.lib.Coqlib.
 From CertiRocq.LambdaANF Require Import algebra List_util.
 From CertiRocq.LambdaWeb Require Import syntax semantics exposed.
@@ -226,6 +226,50 @@ Section Post.
     - eapply ge_refl.
     - unfold post_base'. simpl. rewrite (one_w_eq (Ehalt y) (Ehalt x)). apply ge_refl.
     - assumption.
+  Qed.
+
+
+  (** ** Postconditions for removed and added binding steps *)
+
+  (** Binding forms that dead-binding elimination removes and constant
+      propagation inserts.  They are not calls. *)
+  Definition binding_step (e : exp) : Prop :=
+    match e with
+    | Econstr _ _ _ _ _ | Eproj _ _ _ _ _ _ | Efun _ _ => True
+    | _ => False
+    end.
+
+  (** A binding step taken only by the source. *)
+  Definition post_source_step (P1 P2 : PostT) :=
+    forall e1 rho1 e1' rho1' e2 rho2 c1 t1 c2 t2,
+      binding_step e1 ->
+      P1 (e1', rho1', c1, t1) (e2, rho2, c2, t2) ->
+      P2 (e1, rho1, c1 <+> one_w e1, t1 <+> one_w e1) (e2, rho2, c2, t2).
+
+  (** A binding step taken only by the target. *)
+  Definition post_target_step (P : PostT) :=
+    forall e1 rho1 c1 t1 e2 rho2 e2' rho2' c2 t2,
+      binding_step e2' ->
+      P (e1, rho1, c1, t1) (e2, rho2, c2, t2) ->
+      P (e1, rho1, c1, t1) (e2', rho2', c2 <+> one_w e2', t2 <+> one_w e2').
+
+  (** A family of postconditions indexed by the number of source binding
+      steps that may be removed on the current path (between calls); [Gb]
+      bounds it, and function bodies are checked at [Gb].  This is the
+      structure of CertiRocq's [inline_bound L G] (LambdaANF/bounds.v). *)
+  Class Post_dead (P : nat -> PostT) (PG : PostGT) (Gb : nat) : Prop :=
+    { Hdead_props : forall n : nat, (n <= Gb)%nat -> Post_properties (P n) (P n) PG;
+      Hdead_mono : forall n m : nat, (n <= m)%nat -> (m <= Gb)%nat -> inclusion _ (P n) (P m);
+      Hdead_src : forall n : nat, (n < Gb)%nat -> post_source_step (P n) (P (S n)) }.
+
+  (** Any postcondition, when no step is removed. *)
+  Global Instance Post_dead_const P PG {Hp : Post_properties P P PG} :
+    Post_dead (fun _ => P) PG 0.
+  Proof.
+    constructor.
+    - intros; assumption.
+    - intros n m _ _ x y H; exact H.
+    - intros n Hn. lia.
   Qed.
 
 End Post.

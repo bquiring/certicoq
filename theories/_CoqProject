@@ -102,10 +102,13 @@ LambdaWeb/semantics.v
 LambdaWeb/exposed.v
 LambdaWeb/post.v
 LambdaWeb/compat.v
+LambdaWeb/dead.v
+LambdaWeb/bound.v
 LambdaWeb/indep.v
 LambdaWeb/refl.v
-LambdaWeb/dpe.v
 LambdaWeb/comp.v
+LambdaWeb/dpe.v
+LambdaWeb/cp.v
 LambdaWeb/defunc.v
 LambdaWeb/erase.v
 LambdaWeb/anno.v
