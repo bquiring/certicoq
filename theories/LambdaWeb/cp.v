@@ -20,7 +20,7 @@ From Stdlib Require Import NArith.BinNat ZArith.ZArith Lists.List Sets.Ensembles
 Require Import compcert.lib.Coqlib.
 From CertiRocq.LambdaANF Require Import Ensembles_util List_util tactics algebra set_util.
 From CertiRocq.LambdaANF Require term term_util.
-From CertiRocq.LambdaWeb Require Import syntax semantics exposed post compat dead indep comp bound dpe.
+From CertiRocq.LambdaWeb Require Import syntax semantics exposed post compat dead select indep comp bound dpe.
 
 Import ListNotations.
 
@@ -244,7 +244,7 @@ Section CP_spec.
         trans K n (Ecase x w ((c, e) :: cl)) (Ecase x w ((c, e') :: cl'))
   | Trans_letapp_exposed :
       forall K n x f w ys e e',
-        exposedb w = true ->
+        keeps (sel_L Lc) w = true ->
         trans (M.remove x K) n e e' ->
         trans K n (Eletapp x f w ys e) (Eletapp x f w ys e')
   | Trans_letapp :
@@ -256,7 +256,7 @@ Section CP_spec.
         trans K n (Eletapp x f w ys e) (Eletapp x f w (live_args ys (cmask cs)) e')
   | Trans_app_exposed :
       forall K n f w ys,
-        exposedb w = true ->
+        keeps (sel_L Lc) w = true ->
         trans K n (Eapp f w ys) (Eapp f w ys)
   | Trans_app :
       forall K n f w ys cs,
@@ -303,7 +303,7 @@ Section CP_spec.
   | Trans_Fnil : forall K, trans_fundefs K Fnil Fnil
   | Trans_Fcons_exposed :
       forall K f w xs e e' B B',
-        exposedb w = true ->
+        keeps (sel_L Lc) w = true ->
         trans (param_consts xs [] K) Gb e e' ->
         trans_fundefs K B B' ->
         trans_fundefs K (Fcons f w xs e B) (Fcons f w xs e' B')
@@ -350,7 +350,7 @@ Section CP_spec.
     trans_fundefs K B B' ->
     find_def f B = Some (w, xs, e) ->
     exists e',
-      (exposedb w = true /\ trans (param_consts xs [] K) Gb e e' /\
+      (keeps (sel_L Lc) w = true /\ trans (param_consts xs [] K) Gb e e' /\
        find_def f B' = Some (w, xs, e')) \/
       (exists cs, exposedb w = false /\ Lc ! w = Some cs /\ length cs = length xs /\ NoDup xs /\
                   trans (param_consts xs cs K) Gb e e' /\
@@ -463,12 +463,15 @@ Section CP_rel.
       eexists; split; eauto. intros Hlt. eapply Hb. lia.
   Qed.
 
+  (** Closures of webs without an entry keep their calling convention. *)
+  Definition VT_cpS : VTransT := VT_sel cenv (sel_L Lc) VT_cp.
+
   Context (PG : PostGT).
 
-  Notation V := (V cenv VT_cp PG).
-  Notation E := (E cenv VT_cp PG).
-  Notation G := (G cenv VT_cp PG).
-  Notation var_rel := (var_rel cenv VT_cp PG).
+  Notation V := (V cenv VT_cpS PG).
+  Notation E := (E cenv VT_cpS PG).
+  Notation G := (G cenv VT_cpS PG).
+  Notation var_rel := (var_rel cenv VT_cpS PG).
 
   Ltac fuel_arith :=
     repeat match goal with
@@ -479,7 +482,7 @@ Section CP_rel.
            end; lia.
 
   Lemma V_const k i : V k (const_val i) (const_val i).
-  Proof. destruct i. eapply (V_Vconstr cenv VT_cp); eauto. Qed.
+  Proof. destruct i. eapply (V_Vconstr cenv VT_cpS); eauto. Qed.
 
   (** ** Constant parameters *)
 
@@ -491,7 +494,7 @@ Section CP_rel.
     revert cs rho2. induction xs as [| x xs IH]; intros cs rho2 HE.
     - destruct cs; eauto.
     - destruct cs as [| [[c w] |] cs]; simpl in *; eauto.
-      eapply (E_add_constr cenv VT_cp); eauto.
+      eapply (E_add_constr cenv VT_cpS); eauto.
   Qed.
 
   (** ** Compatibility lemmas for internal calls *)
@@ -513,8 +516,8 @@ Section CP_rel.
       split; [ eapply HOOT; eassumption | exact I ].
     - inv H.
       edestruct Hfun as (v2 & Hget2 & Hv); eauto.
-      eapply (V_internal_fun cenv VT_cp) in Hv;
-        [| rewrite exposed_val_Vfun; intros (w' & xs' & e' & Hfn' & Hw'); congruence ].
+      eapply (V_sel_internal cenv (sel_L Lc) VT_cp PG) in Hv;
+        [| eassumption | eassumption | eapply sel_L_Some; eassumption ].
       destruct v2; try contradiction.
       edestruct var_rel_get_list as (vs2 & Hgetl2 & Hvs); [ eassumption | eapply live_args_get_list; eauto |].
       edestruct (Hv vs vs2 (k - 1)) as (cs' & e2 & HL' & Hf2 & Hbody); eauto.
@@ -522,14 +525,14 @@ Section CP_rel.
       edestruct Hbody as (rho2' & Hset2 & Hb). { symmetry. eapply Forall2_length; eauto. }
       edestruct Hb as (r2 & cin' & cout' & Hstep2 & Hpost & HR);
         [ fuel_arith | eapply wf_env_get_list; eauto | eapply const_ok_vals; eauto | | | eassumption | ].
-      + eapply (V_mono_Forall2 cenv VT_cp); eauto. lia.
+      + eapply (V_mono_Forall2 cenv VT_cpS); eauto. lia.
       + fuel_arith.
       + do 3 eexists. split; [| split ].
         * econstructor 2; [ econstructor; eauto |].
           -- congruence.
-          -- eapply (R_exposed_ex cenv VT_cp); eauto.
+          -- eapply (R_exposed_ex cenv VT_cpS); eauto.
         * eapply Hcompat; eauto.
-        * eapply (R_mono cenv VT_cp); eauto. fuel_arith.
+        * eapply (R_mono cenv VT_cpS); eauto. fuel_arith.
   Qed.
 
   Lemma E_letapp_cp (P : PostT) ex k K rho1 rho2 x f w ys cs e1 e2
@@ -554,8 +557,8 @@ Section CP_rel.
       split; [ eapply HOOT; eassumption | exact I ].
     - inv H;
         (edestruct Hfun as (v2 & Hget2 & Hv); eauto;
-         eapply (V_internal_fun cenv VT_cp) in Hv;
-         [| rewrite exposed_val_Vfun; intros (w' & xs' & e' & Hfn' & Hw'); congruence ];
+         eapply (V_sel_internal cenv (sel_L Lc) VT_cp PG) in Hv;
+         [| eassumption | eassumption | eapply sel_L_Some; eassumption ];
          destruct v2; try contradiction;
          edestruct var_rel_get_list as (vs2 & Hgetl2 & Hvs);
          [ eassumption | eapply live_args_get_list; eauto |];
@@ -564,7 +567,7 @@ Section CP_rel.
          edestruct Hbody as (rho2' & Hset2 & Hb); [ symmetry; eapply Forall2_length; eauto |]).
       + edestruct Hb as (r2 & cin' & cout' & Hstep2 & Hpost & HR);
           [ fuel_arith | eapply wf_env_get_list; eauto | eapply const_ok_vals; eauto | | | eassumption | ].
-        * eapply (V_mono_Forall2 cenv VT_cp); eauto. lia.
+        * eapply (V_mono_Forall2 cenv VT_cpS); eauto. lia.
         * fuel_arith.
         * destruct r2 as [| v2]; try contradiction. simpl in HR.
           edestruct (Hk (k - 1 - to_nat cin1)) as (r2 & cin'' & cout'' & Hstep3 & Hpost' & HR');
@@ -572,12 +575,12 @@ Section CP_rel.
           do 3 eexists. split; [| split ].
           -- econstructor 2; [ econstructor; eauto |].
              ++ congruence.
-             ++ eapply (R_exposed_ex cenv VT_cp); eauto.
+             ++ eapply (R_exposed_ex cenv VT_cpS); eauto.
           -- eapply Hcompat; eauto.
-          -- eapply (R_mono cenv VT_cp); eauto. fuel_arith.
+          -- eapply (R_mono cenv VT_cpS); eauto. fuel_arith.
       + edestruct Hb as (r2 & cin' & cout' & Hstep2 & Hpost & HR);
           [ fuel_arith | eapply wf_env_get_list; eauto | eapply const_ok_vals; eauto | | | eassumption | ].
-        * eapply (V_mono_Forall2 cenv VT_cp); eauto. lia.
+        * eapply (V_mono_Forall2 cenv VT_cpS); eauto. lia.
         * fuel_arith.
         * destruct r2; try contradiction.
           do 3 eexists. split; [| split ].
@@ -630,7 +633,7 @@ Section CP_rel.
                                       V j (Vfun rho1 B g) (Vfun rho2 B' g)).
     { intros j Hlt g Hg. eapply IHk; eauto.
       - intros m n K' ex e e' r1 r2 Hm. eapply Hexp. lia.
-      - eapply (G_mono cenv VT_cp); eauto. lia. }
+      - eapply (G_mono cenv VT_cpS); eauto. lia. }
     assert (Henv : forall j xs vs1 vs2 rho1' rho2' S,
                j < k ->
                S \subset FromList xs :|: (name_in_fundefs B' :|: occurs_free_fundefs B') ->
@@ -639,9 +642,9 @@ Section CP_rel.
                set_lists xs vs2 (def_funs B' B' rho2 rho2) = Some rho2' ->
                G j S rho1' rho2').
     { intros j xs vs1 vs2 rho1' rho2' S Hlt HS Hvs Hs1 Hs2.
-      eapply (G_set_lists cenv VT_cp); eauto.
-      eapply (G_def_funs cenv VT_cp); try (now apply HG).
-      - eapply (G_antimon cenv VT_cp). eapply (G_mono cenv VT_cp); eauto. lia.
+      eapply (G_set_lists cenv VT_cpS); eauto.
+      eapply (G_def_funs cenv VT_cpS); try (now apply HG).
+      - eapply (G_antimon cenv VT_cpS). eapply (G_mono cenv VT_cpS); eauto. lia.
         intros z Hz. inv Hz. inv H. eapply HS in H1. inv H1; [ exfalso; eauto |].
         inv H; eauto. exfalso. eapply H0. eapply trans_fundefs_names; eauto.
       - eapply trans_fundefs_names; eauto.
@@ -650,18 +653,17 @@ Section CP_rel.
     edestruct trans_fundefs_find_def as
         (e' & [ (Hw & Htrans & Hfind') | (cs & Hw & HL & Hlen & Hnd & Htrans & Hfind') ]); eauto.
     - (* exposed function: unchanged calling convention *)
-      eapply (V_Vfun_exposed cenv VT_cp); eauto; try now apply HG.
-      eapply (V_fun_def cenv VT_cp); eauto.
+      eapply (V_Vfun_keeps cenv (sel_L Lc) VT_cp PG); eauto; try now apply HG.
+      eapply (V_fun_def cenv VT_cpS); eauto.
       intros j vs1 vs2 rho1' rho2' Hlt Hexpv Hvs Hs1 Hs2.
-      eapply (E_post_mono cenv VT_cp); [ exact P_PG |].
+      eapply (E_post_mono cenv VT_cpS); [ exact P_PG |].
       eapply Hexp; eauto.
       + eapply K_inv_set_lists; eauto. destruct vs1; exact I.
       + eapply Henv; eauto. eapply occurs_free_in_fun; eauto.
     - (* internal function: constant parameters bound on entry *)
-      eapply (V_Vfun_internal cenv VT_cp); try now apply HG.
-      + constructor. apply HG.
-      + rewrite exposed_val_Vfun. intros (w' & xs' & e'' & Hfn' & Hw'). congruence.
-      + rewrite exposed_val_Vfun. intros (w' & xs' & e'' & Hfn' & Hw'). congruence.
+      eapply (V_Vfun_sel cenv (sel_L Lc) VT_cp PG);
+        [ now apply HG | constructor; apply HG | eapply not_exposed_Vfun; eassumption
+        | eassumption | eassumption | eapply sel_L_Some; eassumption |].
       + unfold VT_cp; cbn -[E']. intros vs1 vs2 j w' xs1 e1 rho1' Hf1 Hs1.
         rewrite Hfind in Hf1. inv Hf1.
         exists cs, (bind_consts xs1 cs e'). split; [ eassumption | split; [ eassumption |] ].
@@ -670,7 +672,7 @@ Section CP_rel.
         { rewrite Hlen2. eapply live_args_length. eapply set_lists_length_eq. symmetry. eassumption. }
         eexists; split; [ symmetry; eassumption |].
         intros Hlt Hwf Hc Hvs.
-        eapply (E_post_mono cenv VT_cp); [ exact P_PG |].
+        eapply (E_post_mono cenv VT_cpS); [ exact P_PG |].
         eapply E_bind_consts; [ exact Htgt |].
         eapply Hexp; eauto.
         * eapply K_inv_set_lists; [ eassumption | eassumption | symmetry; eassumption ].
@@ -694,8 +696,8 @@ Section CP_rel.
           | exact (K_inv_set _ _ _ _ ltac:(eassumption)) ].
 
   Ltac solve_G_set :=
-    eapply (G_set cenv VT_cp); eauto; eapply (G_antimon cenv VT_cp);
-    [ eapply (G_mono cenv VT_cp); eauto; lia | normalize_occurs_free; sets ].
+    eapply (G_set cenv VT_cpS); eauto; eapply (G_antimon cenv VT_cpS);
+    [ eapply (G_mono cenv VT_cpS); eauto; lia | normalize_occurs_free; sets ].
 
   Lemma fundamental k n K ex e e' rho1 rho2 :
     n <= Gb ->
@@ -711,59 +713,59 @@ Section CP_rel.
     induction Htrans; intros ex rho1 rho2 HnG HK HG;
       pose proof (Hprops_n _ HnG) as Hprops'; destruct Hprops'.
     - (* Econstr, constant *)
-      eapply (E_constr_compat_vals cenv VT_cp); eauto.
+      eapply (E_constr_compat_vals cenv VT_cpS); eauto.
       intros m vs1 v2 Hlt Hget Hv. simpl in Hget. inv Hget.
       eapply IH; [ lia | exact HnG | eassumption | solve_K | solve_G_set ].
     - (* Econstr *)
-      eapply (E_constr_compat cenv VT_cp); eauto.
-      + eapply (G_Forall2_var_rel cenv VT_cp); eauto. normalize_occurs_free. sets.
+      eapply (E_constr_compat cenv VT_cpS); eauto.
+      + eapply (G_Forall2_var_rel cenv VT_cpS); eauto. normalize_occurs_free. sets.
       + intros m v1 v2 Hlt Hv.
         eapply IH; [ lia | exact HnG | eassumption | solve_K | solve_G_set ].
     - (* Eproj *)
-      eapply (E_proj_compat cenv VT_cp); eauto.
-      + eapply (G_var_rel cenv VT_cp); eauto. fv_mem.
+      eapply (E_proj_compat cenv VT_cpS); eauto.
+      + eapply (G_var_rel cenv VT_cpS); eauto. fv_mem.
       + intros m v1 v2 Hlt Hv.
         eapply IH; [ lia | exact HnG | eassumption | solve_K | solve_G_set ].
     - (* Ecase [] *)
-      eapply (E_case_nil_compat cenv VT_cp); eauto.
+      eapply (E_case_nil_compat cenv VT_cpS); eauto.
     - (* Ecase (_ :: _) *)
-      eapply (E_case_cons_compat cenv VT_cp); eauto.
+      eapply (E_case_cons_compat cenv VT_cpS); eauto.
       + eapply trans_case_tags; eauto.
-      + eapply (G_var_rel cenv VT_cp); eauto. fv_mem.
+      + eapply (G_var_rel cenv VT_cpS); eauto. fv_mem.
       + intros m Hlt. eapply IH; [ lia | exact HnG | eassumption | solve_K |].
-        eapply (G_antimon cenv VT_cp). eapply (G_mono cenv VT_cp); eauto. lia.
+        eapply (G_antimon cenv VT_cpS). eapply (G_mono cenv VT_cpS); eauto. lia.
         normalize_occurs_free. sets.
       + eapply IHHtrans2; eauto.
-        eapply (G_antimon cenv VT_cp); eauto. normalize_occurs_free. sets.
+        eapply (G_antimon cenv VT_cpS); eauto. normalize_occurs_free. sets.
     - (* Eletapp, exposed *)
-      eapply (E_letapp_compat cenv VT_cp); eauto.
-      + eapply (var_rel_exposed_fun cenv VT_cp); eauto. eapply (G_var_rel cenv VT_cp); eauto. fv_mem.
-      + eapply (G_Forall2_var_rel cenv VT_cp); eauto. normalize_occurs_free. sets.
+      eapply (E_letapp_compat cenv VT_cpS); eauto.
+      + eapply (var_rel_keeps_fun cenv (sel_L Lc) VT_cp PG); eauto. eapply (G_var_rel cenv VT_cpS); eauto. fv_mem.
+      + eapply (G_Forall2_var_rel cenv VT_cpS); eauto. normalize_occurs_free. sets.
       + intros m v1 v2 Hlt _ Hv.
         eapply IH; [ lia | exact HnG | eassumption | solve_K | solve_G_set ].
     - (* Eletapp, internal *)
       eapply E_letapp_cp; eauto.
       + eapply HG.
-      + eapply (G_var_rel cenv VT_cp); eauto. fv_mem.
-      + eapply (G_Forall2_var_rel cenv VT_cp); eauto. normalize_occurs_free. sets.
+      + eapply (G_var_rel cenv VT_cpS); eauto. fv_mem.
+      + eapply (G_Forall2_var_rel cenv VT_cpS); eauto. normalize_occurs_free. sets.
       + intros m v1 v2 Hlt Hv.
         eapply IH; [ lia | exact HnG | eassumption | solve_K | solve_G_set ].
     - (* Eapp, exposed *)
-      eapply (E_app_compat cenv VT_cp); eauto.
-      + eapply (var_rel_exposed_fun cenv VT_cp); eauto. eapply (G_var_rel cenv VT_cp); eauto. fv_mem.
-      + eapply (G_Forall2_var_rel cenv VT_cp); eauto. normalize_occurs_free. sets.
+      eapply (E_app_compat cenv VT_cpS); eauto.
+      + eapply (var_rel_keeps_fun cenv (sel_L Lc) VT_cp PG); eauto. eapply (G_var_rel cenv VT_cpS); eauto. fv_mem.
+      + eapply (G_Forall2_var_rel cenv VT_cpS); eauto. normalize_occurs_free. sets.
     - (* Eapp, internal *)
       eapply E_app_cp; eauto.
       + eapply HG.
-      + eapply (G_var_rel cenv VT_cp); eauto. fv_mem.
-      + eapply (G_Forall2_var_rel cenv VT_cp); eauto. normalize_occurs_free. sets.
+      + eapply (G_var_rel cenv VT_cpS); eauto. fv_mem.
+      + eapply (G_Forall2_var_rel cenv VT_cpS); eauto. normalize_occurs_free. sets.
     - (* Efun *)
-      eapply (E_fun_compat cenv VT_cp); eauto.
-      eapply (E_mono cenv VT_cp) with (k := k); [| lia ].
+      eapply (E_fun_compat cenv VT_cpS); eauto.
+      eapply (E_mono cenv VT_cpS) with (k := k); [| lia ].
       eapply IHHtrans; [ exact HnG | solve_K |].
-      eapply (G_antimon cenv VT_cp); [| eapply occurs_free_Efun_Included ].
-      eapply (G_def_funs cenv VT_cp).
-      + eapply (G_antimon cenv VT_cp); eauto.
+      eapply (G_antimon cenv VT_cpS); [| eapply occurs_free_Efun_Included ].
+      eapply (G_def_funs cenv VT_cpS).
+      + eapply (G_antimon cenv VT_cpS); eauto.
         intros z [Hz Hn]. destruct Hz as [z Hz | z Hz]; [ exact Hz |].
         exfalso; apply Hn.
         match goal with
@@ -774,41 +776,41 @@ Section CP_rel.
       + eapply trans_fundefs_names; eauto.
       + intros f Hfn. eapply Vfun_cp; eauto.
         * eapply K_inv_def_funs; eauto.
-        * eapply (G_antimon cenv VT_cp); eauto. eapply occurs_free_fundefs_Efun_Included.
+        * eapply (G_antimon cenv VT_cpS); eauto. eapply occurs_free_fundefs_Efun_Included.
     - (* Eprim_val *)
-      eapply (E_stuck_compat cenv VT_cp); eauto. intros. eapply Eprim_val_stuck.
+      eapply (E_stuck_compat cenv VT_cpS); eauto. intros. eapply Eprim_val_stuck.
     - (* Eprim *)
-      eapply (E_stuck_compat cenv VT_cp); eauto. intros. eapply Eprim_stuck.
+      eapply (E_stuck_compat cenv VT_cpS); eauto. intros. eapply Eprim_stuck.
     - (* Ehalt *)
-      eapply (E_halt_compat cenv VT_cp); eauto.
-      eapply (G_var_rel cenv VT_cp); eauto. fv_mem.
+      eapply (E_halt_compat cenv VT_cpS); eauto.
+      eapply (G_var_rel cenv VT_cpS); eauto. fv_mem.
     - (* dead constant *)
-      eapply (E_post_mono cenv VT_cp); [ eapply (P_mono (S n)); lia |].
-      eapply (E_dead_constr cenv VT_cp); [ eapply P_src; lia | eapply P_OOT; lia | eapply HG |].
+      eapply (E_post_mono cenv VT_cpS); [ eapply (P_mono (S n)); lia |].
+      eapply (E_dead_constr cenv VT_cpS); [ eapply P_src; lia | eapply P_OOT; lia | eapply HG |].
       intros vs Hget Hv. simpl in Hget. inv Hget.
-      eapply IHHtrans; [ lia | solve_K |]. eapply (G_set_l_not_in cenv VT_cp); eauto.
+      eapply IHHtrans; [ lia | solve_K |]. eapply (G_set_l_not_in cenv VT_cpS); eauto.
     - (* dead Econstr *)
-      eapply (E_post_mono cenv VT_cp); [ eapply (P_mono (S n)); lia |].
-      eapply (E_dead_constr cenv VT_cp); [ eapply P_src; lia | eapply P_OOT; lia | eapply HG |].
-      intros vs _ Hv. eapply IHHtrans; [ lia | solve_K |]. eapply (G_set_l_not_in cenv VT_cp); eauto.
+      eapply (E_post_mono cenv VT_cpS); [ eapply (P_mono (S n)); lia |].
+      eapply (E_dead_constr cenv VT_cpS); [ eapply P_src; lia | eapply P_OOT; lia | eapply HG |].
+      intros vs _ Hv. eapply IHHtrans; [ lia | solve_K |]. eapply (G_set_l_not_in cenv VT_cpS); eauto.
     - (* dead Eproj *)
-      eapply (E_post_mono cenv VT_cp); [ eapply (P_mono (S n)); lia |].
-      eapply (E_dead_proj cenv VT_cp); [ eapply P_src; lia | eapply P_OOT; lia | eapply HG |].
-      intros v Hv. eapply IHHtrans; [ lia | solve_K |]. eapply (G_set_l_not_in cenv VT_cp); eauto.
+      eapply (E_post_mono cenv VT_cpS); [ eapply (P_mono (S n)); lia |].
+      eapply (E_dead_proj cenv VT_cpS); [ eapply P_src; lia | eapply P_OOT; lia | eapply HG |].
+      intros v Hv. eapply IHHtrans; [ lia | solve_K |]. eapply (G_set_l_not_in cenv VT_cpS); eauto.
     - (* dead Efun *)
-      eapply (E_post_mono cenv VT_cp); [ eapply (P_mono (S n)); lia |].
-      eapply (E_dead_fun cenv VT_cp); [ eapply P_src; lia | eapply P_OOT; lia |].
-      eapply IHHtrans; [ lia | solve_K |]. eapply (G_def_funs_l_not_in cenv VT_cp); eauto. eapply HG.
+      eapply (E_post_mono cenv VT_cpS); [ eapply (P_mono (S n)); lia |].
+      eapply (E_dead_fun cenv VT_cpS); [ eapply P_src; lia | eapply P_OOT; lia |].
+      eapply IHHtrans; [ lia | solve_K |]. eapply (G_def_funs_l_not_in cenv VT_cpS); eauto. eapply HG.
   Qed.
 
   (** ** Top level *)
 
   Lemma E_top_cp n e e' :
-    n <= Gb -> trans Lc Gb (M.empty _) n e e' -> E_top cenv VT_cp (P n) PG e e'.
+    n <= Gb -> trans Lc Gb (M.empty _) n e e' -> E_top cenv VT_cpS (P n) PG e e'.
   Proof.
     intros Hn Htrans k rho1 rho2 [HG _] Hbind. eapply fundamental; eauto.
     - eapply K_inv_empty.
-    - eapply (G_antimon cenv VT_cp); eauto. eapply trans_occurs_free; eauto.
+    - eapply (G_antimon cenv VT_cpS); eauto. eapply trans_occurs_free; eauto.
   Qed.
 
   (** Constant propagation, with local constants and dead-binding
@@ -816,7 +818,7 @@ Section CP_rel.
   Theorem E_web_cp n e e' :
     n <= Gb -> trans Lc Gb (M.empty _) n e e' -> E_web cenv (P n) PG e e'.
   Proof.
-    intros Hn Htrans. exact (E_top_E_web cenv VT_cp (P n) PG e e' (E_top_cp n e e' Hn Htrans)).
+    intros Hn Htrans. exact (E_top_E_web cenv VT_cpS (P n) PG e e' (E_top_cp n e e' Hn Htrans)).
   Qed.
 
 End CP_rel.

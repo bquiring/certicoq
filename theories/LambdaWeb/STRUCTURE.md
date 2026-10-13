@@ -29,6 +29,7 @@ relation (`anno.v`) and assumed in `pipeline.v`.
 | `post.v` | λweb versions of CertiRocq's postcondition obligations; `P_ge` (target fuel ≥ source fuel); obligations for removed source / inserted target binding steps and the `Post_dead` families | — |
 | `compat.v` | Generic compatibility lemmas (one per form) | §5.1 "Mechanization details" |
 | `dead.v` | Compatibility lemmas for binding steps taken by one side only (dead `Econstr`/`Eproj`/`Efun` in the source, inserted constants in the target) | — |
+| `select.v` | Transforming a subset of the webs: `VT_sel sel VT` uses `VT` for closures of selected webs and the unchanged calling convention (`V_fun`) for the others | — |
 | `bound.v` | `dead_bound L G`, the λweb counterpart of CertiRocq's `inline_bound`: a `Post_dead` family with an upper bound (divergence preservation) | — |
 | `indep.v` | Exposed values do not depend on `VT`; top-level relations; any instantiation implies the λweb relation | Thm 5.1, Cor 5.2 |
 | `refl.v` | Identity instantiation, fundamental property, reflexivity of the λweb relation | — |
@@ -114,6 +115,18 @@ Restrictions:
 The proof holds for any postcondition insensitive to extra target steps
 (`post_target_steps`); `P_ge` is the instance used by `dfn_refines`, which
 gives termination and divergence preservation for closed programs.
+
+## Web subsets (`select.v`)
+
+A pass need not transform every internal web.  With `sel w` saying which
+webs it transforms, a function or call of web `w` is left unchanged when
+`keeps sel w` (it is exposed, or not selected), and is then handled by the
+generic compatibility lemmas exactly like an exposed one.  The pass's own
+relation `VT` only has to describe closures of selected webs; `VT_sel sel VT`
+relates the other internal closures by `V_fun`.  DPE and constant
+propagation select the webs that have an entry in their map (`sel_L`), so
+known functions, or any web the analysis has no use for, can simply be left
+out of the map.
 
 ## Dead bindings and constants (`dpe.v`, `cp.v`)
 

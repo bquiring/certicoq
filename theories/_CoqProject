@@ -103,6 +103,7 @@ LambdaWeb/exposed.v
 LambdaWeb/post.v
 LambdaWeb/compat.v
 LambdaWeb/dead.v
+LambdaWeb/select.v
 LambdaWeb/bound.v
 LambdaWeb/indep.v
 LambdaWeb/refl.v
