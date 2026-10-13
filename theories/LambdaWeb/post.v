@@ -16,6 +16,34 @@ Import ListNotations.
 
 Open Scope alg_scope.
 
+(** * Fuel ordering *)
+
+Section Ge.
+
+  Context {I A : Type} {HR : @resource I A}.
+
+  Definition ge (x y : A) : Prop := exists c, x = (c <+> y).
+
+  Lemma ge_refl x : ge x x.
+  Proof. exists zero. rewrite plus_zero. reflexivity. Qed.
+
+  Lemma ge_trans x y z : ge x y -> ge y z -> ge x z.
+  Proof. intros [a Ha] [b Hb]. subst. exists (a <+> b). rewrite plus_assoc. reflexivity. Qed.
+
+  Lemma ge_plus_l x y : ge (y <+> x) x.
+  Proof. exists y. reflexivity. Qed.
+
+  Lemma ge_plus_r x y : ge (x <+> y) x.
+  Proof. exists y. apply plus_comm. Qed.
+
+  Lemma ge_add x y x' y' : ge x y -> ge x' y' -> ge (x <+> x') (y <+> y').
+  Proof.
+    intros [a Ha] [b Hb]. subst. exists (a <+> b).
+    rewrite !plus_assoc. f_equal. rewrite <- !plus_assoc. f_equal. apply plus_comm.
+  Qed.
+
+End Ge.
+
 Section Post.
 
   Variable (cenv : term.ctor_env).
@@ -160,5 +188,44 @@ Section Post.
 
   Global Instance Post_properties_true : Post_properties post_true post_true post_true.
   Proof. constructor; unfold post_true; repeat intro; exact I. Qed.
+
+  Lemma one_w_eq (e1 e2 : exp) : (one_w e1 : fuel) = one_w e2.
+  Proof. unfold one_w, algebra.one. apply one_eq. Qed.
+
+  (** ** Postconditions insensitive to extra target steps *)
+
+  Definition post_target_steps (P : PostT) :=
+    forall e1 rho1 c1 t1 e2 rho2 c2 t2 e2' rho2' c2' t2',
+      P (e1, rho1, c1, t1) (e2, rho2, c2, t2) -> ge c2' c2 ->
+      P (e1, rho1, c1, t1) (e2', rho2', c2', t2').
+
+  (** The target uses at least as much fuel as the source *)
+  Definition P_ge : PostT :=
+    fun p1 p2 => match p1, p2 with (_, _, c1, _), (_, _, c2, _) => ge c2 c1 end.
+
+  Lemma P_ge_target_steps : post_target_steps P_ge.
+  Proof. intros until t2'. simpl. intros H Hc. eapply ge_trans; eauto. Qed.
+
+  Lemma P_ge_upper_bound : post_upper_bound P_ge.
+  Proof. intros e1 rho1 e2 rho2. exists (fun c => c). intros cin1 cin2 cout1 cout2 H. exact H. Qed.
+
+  Global Instance P_ge_properties : Post_properties P_ge P_ge P_ge.
+  Proof.
+    constructor; repeat intro; simpl in *;
+      repeat match goal with
+             | [ H : P_ge _ _ |- _ ] => simpl in H
+             end.
+    - erewrite (one_w_eq (Econstr _ _ _ _ e2)). eapply ge_add; eauto. eapply ge_refl.
+    - erewrite (one_w_eq (Eproj _ _ _ _ _ e2)). eapply ge_add; eauto. eapply ge_refl.
+    - erewrite (one_w_eq (Efun B2 e2)). eapply ge_add; eauto. eapply ge_refl.
+    - erewrite (one_w_eq (Ecase _ _ ((_, e2) :: _))). eapply ge_add; eauto. eapply ge_refl.
+    - eauto.
+    - erewrite (one_w_eq (Eapp _ _ _)). eapply ge_add; eauto. eapply ge_refl.
+    - erewrite (one_w_eq (Eletapp _ _ _ _ e2)). eapply ge_add; [ eapply ge_add |]; eauto. eapply ge_refl.
+    - erewrite (one_w_eq (Eletapp _ _ _ _ e2)). eapply ge_add; eauto. eapply ge_refl.
+    - eapply ge_refl.
+    - unfold post_base'. simpl. rewrite (one_w_eq (Ehalt y) (Ehalt x)). apply ge_refl.
+    - assumption.
+  Qed.
 
 End Post.

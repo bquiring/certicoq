@@ -26,11 +26,12 @@ relation (`anno.v`) and assumed in `pipeline.v`.
 | `syntax.v` | λweb syntax and values, the abstract exposed webs, exposed and well-formed values, erasure to λANF, free variables (inherited through erasure) | Fig. 3, Fig. 4 (top) |
 | `semantics.v` | Fuel/trace big-step semantics with web and exposure checks; determinism, fuel lemmas, preservation of well-formedness | Fig. 4, Lemma 4.1 |
 | `exposed.v` | The parameterized relations `V`/`E`/`R`/`G` over a transformation-specific relation `VT` for internal closures; monotonicity; environments of mutually recursive bundles | Fig. 5 |
-| `post.v` | λweb versions of CertiRocq's postcondition obligations | — |
+| `post.v` | λweb versions of CertiRocq's postcondition obligations; `P_ge` (target fuel ≥ source fuel), which tolerates target-only steps | — |
 | `compat.v` | Generic compatibility lemmas (one per form) | §5.1 "Mechanization details" |
 | `indep.v` | Exposed values do not depend on `VT`; top-level relations; any instantiation implies the λweb relation | Thm 5.1, Cor 5.2 |
 | `refl.v` | Identity instantiation, fundamental property, reflexivity of the λweb relation | — |
 | `dpe.v` | Flow-directed dead-parameter elimination over mutually recursive bundles | §6.1, Fig. 6, Thms 5.3/5.4 |
+| `defunc.v` | MLton-style defunctionalization: lifts functions of internal bundles to top-level code functions, represents each closure as a record whose tag is drawn from its lambda set, and dispatches calls by `Ecase`; correctness and refinement (incl. divergence) | §6.3 |
 | `comp.v` | Transitive closure, adequacy and linking for λweb | §7.3, Lemmas 7.5, 7.6 |
 | `erase.v` | Cross-language erasure relation λweb → λANF; `erase` is correct; adequacy; linking | §7.4, Fig. 11, Lemmas 7.7, 7.8 |
 | `anno.v` | Cross-language annotation relation λANF → λweb (the spec of an analysis); adequacy; linking | §7.2, Fig. 10, Lemmas 7.3, 7.4 |
@@ -40,7 +41,7 @@ Main results: `V_exposed_indep`, `E_top_E_web` (indep.v), `E_web_refl`
 (refl.v), `E_web_dpe` (dpe.v), `web_exp_n_refines`,
 `web_exp_n_preserves_linking` (comp.v), `erase_correct`, `E_erase_refines`,
 `E_erase_preserves_linking` (erase.v), `E_anno_refines`,
-`E_anno_preserves_linking` (anno.v), `pipeline_refines`,
+`E_anno_preserves_linking` (anno.v), `dfn_correct`, `dfn_refines` (defunc.v), `pipeline_refines`,
 `pipeline_preserves_linking`, `compile_refines` (pipeline.v).
 
 `Print Assumptions` on each of them reports only `exposedb` (the abstract set
@@ -85,9 +86,28 @@ make LambdaWeb/pipeline.vo LambdaWeb/dpe.vo
 
 ## Not ported yet
 
-* Constant propagation and defunctionalization (paper §6.2, §6.3).  Both add
-  target-only evaluation steps (inserted constructor bindings, case dispatch),
-  so under CertiRocq's postconditions they need an extra closure property of
-  `PG` for target-side steps; DPE does not.
+* Constant propagation (paper §6.2).
+* Composing defunctionalization with `web_exp_n` (`preserves_fv`): it would
+  need the code bodies of `Btop` to be closed.
 * A flow analysis inhabiting the annotation relation (the pipeline assumes
   one).
+
+## Defunctionalization (`defunc.v`)
+
+The pass is specified by the relation `trans_top L T Btop e et`: the target is
+`Efun Btop e'` where `Btop` holds one code function per internal function,
+`T` maps each closure tag to its code function, web and number of free
+variables, and `L` maps each web to its lambda set (the possible tags).
+Restrictions:
+
+* bundles are homogeneous (all exposed or all internal); internal bundles are
+  nonempty with distinct names;
+* fields and parameters are fresh w.r.t. the code-function names;
+* the continuation of a let-bound call is duplicated in each dispatch branch
+  (no join points);
+* the lambda-set tags must be consistent in `cenv` and the code functions must
+  be in `Btop` (section hypotheses `HL`, `HT`).
+
+The proof holds for any postcondition insensitive to extra target steps
+(`post_target_steps`); `P_ge` is the instance used by `dfn_refines`, which
+gives termination and divergence preservation for closed programs.
