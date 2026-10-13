@@ -34,9 +34,12 @@ relation (`anno.v`) and assumed in `pipeline.v`.
 | `indep.v` | Exposed values do not depend on `VT`; top-level relations; any instantiation implies the λweb relation | Thm 5.1, Cor 5.2 |
 | `refl.v` | Identity instantiation, fundamental property, reflexivity of the λweb relation | — |
 | `dpe.v` | Flow-directed dead-parameter elimination over mutually recursive bundles, also dropping dead local bindings | §6.1, Fig. 6, Thms 5.3/5.4 |
+| `dpe_impl.v` | An implementation of DPE (liveness analysis per web, dead-binding elimination) and the proof that it inhabits the relation | — |
 | `cp.v` | Flow-directed constant propagation with locally bound constants (and constant parameters), dropping dead local bindings | §6.2, Fig. 7 |
-| `defunc.v` | MLton-style defunctionalization: lifts functions of internal bundles to top-level code functions, represents each closure as a record whose tag is drawn from its lambda set, and dispatches calls by `Ecase`; correctness and refinement (incl. divergence) | §6.3 |
+| `cp_impl.v` | An implementation of constant propagation: an iterated analysis, the transformation, and a checker proven sound | — |
+| `defunc.v` | MLton-style defunctionalization of lambda-lifted programs: closures of the selected webs become records, calls become a case over the lambda set and a named call of the code function; mixed bundles; join points; correctness and refinement (incl. divergence) | §6.3 |
 | `comp.v` | Transitive closure, adequacy and linking for λweb | §7.3, Lemmas 7.5, 7.6 |
+| `dfn_impl.v` | An implementation of defunctionalization: wrapper analysis, fresh tags and inductive types for the lambda sets (extending the constructor environment), the transformation, and a checker proven sound | — |
 | `erase.v` | Cross-language erasure relation λweb → λANF; `erase` is correct; adequacy; linking | §7.4, Fig. 11, Lemmas 7.7, 7.8 |
 | `anno.v` | Cross-language annotation relation λANF → λweb (the spec of an analysis); adequacy; linking | §7.2, Fig. 10, Lemmas 7.3, 7.4 |
 | `pipeline.v` | Composition with CertiRocq's `preord_exp_n`: refinement and linking for the whole pipeline; a compiler built from correct phases is correct | §7.5, Lemmas 7.10, 7.11 |
@@ -46,7 +49,8 @@ Main results: `V_exposed_indep`, `E_top_E_web` (indep.v), `E_web_refl`
 `cp_refines` (cp.v), `web_exp_n_refines`,
 `web_exp_n_preserves_linking` (comp.v), `erase_correct`, `E_erase_refines`,
 `E_erase_preserves_linking` (erase.v), `E_anno_refines`,
-`E_anno_preserves_linking` (anno.v), `dfn_correct`, `dfn_refines` (defunc.v), `pipeline_refines`,
+`E_anno_preserves_linking` (anno.v), `dfn_correct_top`, `dfn_refines` (defunc.v), `dpe_top_refines`, `cp_top_refines`,
+`dfn_top_refines` (implementations), `pipeline_refines`,
 `pipeline_preserves_linking`, `compile_refines` (pipeline.v).
 
 `Print Assumptions` on each of them reports only `exposedb` (the abstract set
@@ -91,30 +95,46 @@ make LambdaWeb/pipeline.vo LambdaWeb/dpe.vo
 
 ## Not ported yet
 
-* Composing defunctionalization with `web_exp_n` (`preserves_fv`): it would
-  need the code bodies of `Btop` to be closed.
+* Composing defunctionalization with `web_exp_n` needs `preserves_fv` for
+  `trans_top` (free variables of the target are free in the source); since
+  the code functions are no longer created by the pass, this should be a
+  syntactic induction, but it is not done.
+* The implementations cannot be run inside Rocq, since the set of exposed
+  webs (`exposedb`) is a parameter.
 * A flow analysis inhabiting the annotation relation (the pipeline assumes
   one).
 
 ## Defunctionalization (`defunc.v`)
 
-The pass is specified by the relation `trans_top L T Btop e et`: the target is
-`Efun Btop e'` where `Btop` holds one code function per internal function,
-`T` maps each closure tag to its code function, web and number of free
-variables, and `L` maps each web to its lambda set (the possible tags).
-Restrictions:
+The pass runs after lambda lifting.  The source is `Efun Btop e0`, where the
+code functions `Btop` are kept unchanged (they may have free variables only if
+the program does).  A web `w` is selected when it has a lambda set `L ! w`;
+every function of a selected web must be a lambda-lifting wrapper
+`f xs = code (xs ++ zs)` of a code function (`TB_sel`), with `T ! c = (code,
+wc, |zs|)` for its tag `c`.
 
-* bundles are homogeneous (all exposed or all internal); internal bundles are
-  nonempty with distinct names;
-* fields and parameters are fresh w.r.t. the code-function names;
-* the continuation of a let-bound call is duplicated in each dispatch branch
-  (no join points);
-* the lambda-set tags must be consistent in `cenv` and the code functions must
-  be in `Btop` (section hypotheses `HL`, `HT`).
+* A bundle may mix wrappers and other functions: the other functions stay in
+  an `Efun` (`fun_recs`), and rebuild the records of their wrapper siblings on
+  entry; the fields of a record must not be wrappers of the same bundle.
+* A call through a selected web becomes a case over the lambda set whose
+  branches project the fields into fresh variables and call the code function
+  by name; the continuation of a bound call is duplicated or put in a join
+  point (`Trans_letapp_join`).
+* `VT_dfn` relates a wrapper closure to its record: the code closure in its
+  environment is related to the target code function of the tag, and its
+  free variables to the fields.  Unselected internal closures keep their
+  calling convention (`select.v`).
+* A selected call takes two steps in the source (wrapper, code) and a case,
+  the projections and one call in the target: the inner call relation is
+  proven with `P_sh` (the target may be one step behind), which the case step
+  turns into `P_ge`.
 
-The proof holds for any postcondition insensitive to extra target steps
-(`post_target_steps`); `P_ge` is the instance used by `dfn_refines`, which
-gives termination and divergence preservation for closed programs.
+The implementation (`dfn_impl.v`) selects the internal webs whose functions
+are all wrappers of code functions, gives every wrapper a fresh tag and
+every selected web a fresh inductive type, and checks the side conditions;
+if the check fails, it returns the program unchanged.  `dfn_top_refines`
+relates the source under the original constructor environment to the target
+under the extended one.
 
 ## Web subsets (`select.v`)
 

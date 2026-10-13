@@ -109,8 +109,11 @@ LambdaWeb/indep.v
 LambdaWeb/refl.v
 LambdaWeb/comp.v
 LambdaWeb/dpe.v
+LambdaWeb/dpe_impl.v
 LambdaWeb/cp.v
+LambdaWeb/cp_impl.v
 LambdaWeb/defunc.v
+LambdaWeb/dfn_impl.v
 LambdaWeb/erase.v
 LambdaWeb/anno.v
 LambdaWeb/pipeline.v
