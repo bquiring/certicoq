@@ -1,0 +1,164 @@
+(* Postconditions for λweb.
+
+   CertiRocq's logical relations carry a local postcondition [P] and a
+   global postcondition [PG] relating the fuel consumed and the traces
+   produced by the two executions.  The compatibility lemmas require the
+   postconditions to be closed under the evaluation rules; these are the
+   λweb versions of the side conditions of LambdaANF/logical_relations.v
+   ([post_constr_compat], ..., [Post_properties]). *)
+
+From Stdlib Require Import NArith.BinNat ZArith.ZArith Lists.List Sets.Ensembles Relations.Relations.
+Require Import compcert.lib.Coqlib.
+From CertiRocq.LambdaANF Require Import algebra List_util.
+From CertiRocq.LambdaWeb Require Import syntax semantics exposed.
+
+Import ListNotations.
+
+Open Scope alg_scope.
+
+Section Post.
+
+  Variable (cenv : term.ctor_env).
+
+  Context {fuel : Type} {Hf : @fuel_resource fuel} {trace : Type} {Ht : @trace_resource trace}.
+
+  Local Notation PostT := (@exposed.PostT fuel trace).
+  Local Notation PostGT := (@exposed.PostGT fuel trace).
+
+  (** Versions of the properties where the expressions and environments
+      are externalized *)
+
+  Definition post_constr_compat' x w t ys e1 rho1 x' w' t' ys' e2 rho2 (P1 P2 : PostT) :=
+    forall vs vs' c1 c2 cout1 cout2,
+      get_list ys rho1 = Some vs ->
+      get_list ys' rho2 = Some vs' ->
+      P1 (e1, M.set x (Vconstr w t vs) rho1, c1, cout1) (e2, M.set x' (Vconstr w' t' vs') rho2, c2, cout2) ->
+      P2 (Econstr x w t ys e1, rho1, c1 <+> one_w (Econstr x w t ys e1), cout1 <+> one_w (Econstr x w t ys e1))
+         (Econstr x' w' t' ys' e2, rho2, c2 <+> one_w (Econstr x' w' t' ys' e2), cout2 <+> one_w (Econstr x' w' t' ys' e2)).
+
+  Definition post_proj_compat' x w t N y e1 rho1 x' w' t' N' y' e2 rho2 (P1 P2 : PostT) :=
+    forall vs v1 v2 c1 c2 cout1 cout2,
+      M.get y rho1 = Some (Vconstr w t vs) ->
+      nthN vs N = Some v1 ->
+      P1 (e1, M.set x v1 rho1, c1, cout1) (e2, M.set x' v2 rho2, c2, cout2) ->
+      P2 (Eproj x w t N y e1, rho1, c1 <+> one_w (Eproj x w t N y e1), cout1 <+> one_w (Eproj x w t N y e1))
+         (Eproj x' w' t' N' y' e2, rho2, c2 <+> one_w (Eproj x' w' t' N' y' e2), cout2 <+> one_w (Eproj x' w' t' N' y' e2)).
+
+  Definition post_case_compat_hd' x w t e1 B1 rho1 x' w' t' e2 B2 rho2 (P1 P2 : PostT) :=
+    forall c1 c2 cout1 cout2,
+      P1 (e1, rho1, c1, cout1) (e2, rho2, c2, cout2) ->
+      P2 (Ecase x w ((t, e1) :: B1), rho1, c1 <+> one_w (Ecase x w ((t, e1) :: B1)), cout1 <+> one_w (Ecase x w ((t, e1) :: B1)))
+         (Ecase x' w' ((t', e2) :: B2), rho2, c2 <+> one_w (Ecase x' w' ((t', e2) :: B2)), cout2 <+> one_w (Ecase x' w' ((t', e2) :: B2))).
+
+  Definition post_case_compat_tl' x w t e1 B1 rho1 x' w' t' e2 B2 rho2 (P1 P2 : PostT) :=
+    forall c1 c2 cout1 cout2,
+      P1 (Ecase x w B1, rho1, c1, cout1) (Ecase x' w' B2, rho2, c2, cout2) ->
+      P2 (Ecase x w ((t, e1) :: B1), rho1, c1, cout1) (Ecase x' w' ((t', e2) :: B2), rho2, c2, cout2).
+
+  Definition post_fun_compat' B1 e1 rho1 B2 e2 rho2 (P1 P2 : PostT) :=
+    forall c1 c2 cout1 cout2,
+      P1 (e1, def_funs B1 B1 rho1 rho1, c1, cout1) (e2, def_funs B2 B2 rho2 rho2, c2, cout2) ->
+      P2 (Efun B1 e1, rho1, c1 <+> one_w (Efun B1 e1), cout1 <+> one_w (Efun B1 e1))
+         (Efun B2 e2, rho2, c2 <+> one_w (Efun B2 e2), cout2 <+> one_w (Efun B2 e2)).
+
+  Definition post_OOT' e1 rho1 e2 rho2 (P1 : PostT) :=
+    forall c,
+      c << one_w e1 -> P1 (e1, rho1, c, <0>) (e2, rho2, c, <0>).
+
+  Definition post_base' x rho1 y rho2 (P1 : PostT) :=
+    P1 (Ehalt x, rho1, one_w (Ehalt x), one_w (Ehalt x)) (Ehalt y, rho2, one_w (Ehalt y), one_w (Ehalt y)).
+
+  Definition post_app_compat' f w ys rho1 f' w' ys' rho2 (P : PostT) (PG : PostGT) :=
+    forall xs e1 e2 rhoc1 rhoc2 B h vs rhoc1' c1 c2 cout1 cout2,
+      M.get f rho1 = Some (Vfun rhoc1 B h) ->
+      get_list ys rho1 = Some vs ->
+      find_def h B = Some (w, xs, e1) ->
+      set_lists xs vs (def_funs B B rhoc1 rhoc1) = Some rhoc1' ->
+      PG (e1, rhoc1', c1, cout1) (e2, rhoc2, c2, cout2) ->
+      P (Eapp f w ys, rho1, c1 <+> one_w (Eapp f w ys), cout1 <+> one_w (Eapp f w ys))
+        (Eapp f' w' ys', rho2, c2 <+> one_w (Eapp f' w' ys'), cout2 <+> one_w (Eapp f' w' ys')).
+
+  Definition post_letapp_compat' x f w ys e1 rho1 x' f' w' ys' e2 rho2 (P1 P2 : PostT) (PG : PostGT) :=
+    forall xs e_b1 v1 e_b2 v2
+           rhoc1 rhoc2 B h vs rhoc1' c1 c1' c2 c2' cout1 cout2 cout1' cout2',
+      M.get f rho1 = Some (Vfun rhoc1 B h) ->
+      get_list ys rho1 = Some vs ->
+      find_def h B = Some (w, xs, e_b1) ->
+      set_lists xs vs (def_funs B B rhoc1 rhoc1) = Some rhoc1' ->
+      bstep_fuel cenv (exposedb w) rhoc1' e_b1 c1 (Res v1) cout1 ->
+      PG (e_b1, rhoc1', c1, cout1) (e_b2, rhoc2, c2, cout2) ->
+      P1 (e1, M.set x v1 rho1, c1', cout1') (e2, M.set x' v2 rho2, c2', cout2') ->
+      P2 (Eletapp x f w ys e1, rho1, c1 <+> c1' <+> one_w (Eletapp x f w ys e1), cout1 <+> cout1' <+> one_w (Eletapp x f w ys e1))
+         (Eletapp x' f' w' ys' e2, rho2, c2 <+> c2' <+> one_w (Eletapp x' f' w' ys' e2), cout2 <+> cout2' <+> one_w (Eletapp x' f' w' ys' e2)).
+
+  Definition post_letapp_compat_OOT' x f w ys e1 rho1 x' f' w' ys' e2 rho2 (P2 : PostT) (PG : PostGT) :=
+    forall xs e_b1 e_b2 rhoc1 rhoc2 B h vs rhoc1' c1 c2 cout1 cout2,
+      M.get f rho1 = Some (Vfun rhoc1 B h) ->
+      get_list ys rho1 = Some vs ->
+      find_def h B = Some (w, xs, e_b1) ->
+      set_lists xs vs (def_funs B B rhoc1 rhoc1) = Some rhoc1' ->
+      PG (e_b1, rhoc1', c1, cout1) (e_b2, rhoc2, c2, cout2) ->
+      P2 (Eletapp x f w ys e1, rho1, c1 <+> one_w (Eletapp x f w ys e1), cout1 <+> one_w (Eletapp x f w ys e1))
+         (Eletapp x' f' w' ys' e2, rho2, c2 <+> one_w (Eletapp x' f' w' ys' e2), cout2 <+> one_w (Eletapp x' f' w' ys' e2)).
+
+  (** Properties over all expressions and environments *)
+
+  Definition post_constr_compat (P1 P2 : PostT) :=
+    forall x w t ys e1 rho1 x' w' t' ys' e2 rho2, post_constr_compat' x w t ys e1 rho1 x' w' t' ys' e2 rho2 P1 P2.
+
+  Definition post_proj_compat (P1 P2 : PostT) :=
+    forall x w t N y e1 rho1 x' w' t' N' y' e2 rho2, post_proj_compat' x w t N y e1 rho1 x' w' t' N' y' e2 rho2 P1 P2.
+
+  Definition post_case_compat_hd (P1 P2 : PostT) :=
+    forall x w t e1 B1 rho1 x' w' t' e2 B2 rho2, post_case_compat_hd' x w t e1 B1 rho1 x' w' t' e2 B2 rho2 P1 P2.
+
+  Definition post_case_compat_tl (P1 P2 : PostT) :=
+    forall x w t e1 B1 rho1 x' w' t' e2 B2 rho2, post_case_compat_tl' x w t e1 B1 rho1 x' w' t' e2 B2 rho2 P1 P2.
+
+  Definition post_fun_compat (P1 P2 : PostT) :=
+    forall B1 e1 rho1 B2 e2 rho2, post_fun_compat' B1 e1 rho1 B2 e2 rho2 P1 P2.
+
+  Definition post_OOT (P1 : PostT) :=
+    forall e1 rho1 e2 rho2, post_OOT' e1 rho1 e2 rho2 P1.
+
+  Definition post_base (P1 : PostT) :=
+    forall x rho1 y rho2, post_base' x rho1 y rho2 P1.
+
+  Definition post_app_compat (P : PostT) (PG : PostGT) :=
+    forall f w ys rho1 f' w' ys' rho2, post_app_compat' f w ys rho1 f' w' ys' rho2 P PG.
+
+  Definition post_letapp_compat (P1 P2 : PostT) (PG : PostGT) :=
+    forall x f w ys e1 rho1 x' f' w' ys' e2 rho2, post_letapp_compat' x f w ys e1 rho1 x' f' w' ys' e2 rho2 P1 P2 PG.
+
+  Definition post_letapp_compat_OOT (P2 : PostT) (PG : PostGT) :=
+    forall x f w ys e1 rho1 x' f' w' ys' e2 rho2, post_letapp_compat_OOT' x f w ys e1 rho1 x' f' w' ys' e2 rho2 P2 PG.
+
+  Class Post_properties (P1 P2 : PostT) (PG : PostGT) : Prop :=
+    { HPost_con : post_constr_compat P1 P2;
+      HPost_proj : post_proj_compat P1 P2;
+      HPost_fun : post_fun_compat P1 P2;
+      HPost_case_hd : post_case_compat_hd P1 P2;
+      HPost_case_tl : post_case_compat_tl P2 P2;
+      HPost_app : post_app_compat P1 PG;
+      HPost_letapp : post_letapp_compat P1 P2 PG;
+      HPost_letapp_OOT : post_letapp_compat_OOT P1 PG;
+      HPost_OOT : post_OOT P2;
+      Hpost_base : post_base P2;
+      HGPost : inclusion _ P1 PG }.
+
+  (** Upper bound on the fuel consumed by the target; this is what gives
+      divergence preservation. *)
+  Definition post_upper_bound (P : PostT) :=
+    forall e1 rho1 e2 rho2,
+    exists (f : fuel -> fuel),
+    forall cin1 cin2 cout1 cout2,
+      P (e1, rho1, f cin1, cout1) (e2, rho2, cin2, cout2) ->
+      exists (c : fuel), cin2 = (c <+> cin1).
+
+  (** The trivial postcondition satisfies all compatibility conditions. *)
+  Definition post_true : PostT := fun _ _ => True.
+
+  Global Instance Post_properties_true : Post_properties post_true post_true post_true.
+  Proof. constructor; unfold post_true; repeat intro; exact I. Qed.
+
+End Post.

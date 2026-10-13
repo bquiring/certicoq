@@ -53,6 +53,7 @@ Structure of the theories directory:
 * `theories/common`: contains common utilities shared across the development
 * `theories/LambdaBox_to_LambdaANF`: contains the translation from MetaRocq's erased LambdaBox language to CertiRocq's ANF IR
 * `theories/LambdaANF`: contains the λANF IR, optimization pipeline, and proofs
+* `theories/LambdaWeb`: contains λweb (λANF with webs and exposed values), the logical relations for flow-directed transformations, flow-directed dead-parameter elimination, and the compositional correctness of a pipeline through λweb (see `theories/LambdaWeb/STRUCTURE.md`)
 * `theories/Compiler`: contains the top-level CertiRocq pipeline
 * `theories/Codegen`: contains the Clight code generator
 * `theories/CodegenWasm`: contains the Wasm code generator

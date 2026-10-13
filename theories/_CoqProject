@@ -1,6 +1,7 @@
 -R Compiler             CertiRocq.Compiler
 -R common               CertiRocq.Common
 -R LambdaANF            CertiRocq.LambdaANF
+-R LambdaWeb            CertiRocq.LambdaWeb
 -R LambdaBox_to_LambdaANF CertiRocq.LambdaBox_to_LambdaANF
 -R ../libraries         CertiRocq.Libraries
 -R Codegen              CertiRocq.Codegen
@@ -94,6 +95,20 @@ LambdaANF/inline.v
 LambdaANF/inline_correct.v
 LambdaANF/toplevel.v
 LambdaANF/toplevel_theorems.v
+
+# LambdaWeb: λANF with webs and exposed values, flow-directed transformations
+LambdaWeb/syntax.v
+LambdaWeb/semantics.v
+LambdaWeb/exposed.v
+LambdaWeb/post.v
+LambdaWeb/compat.v
+LambdaWeb/indep.v
+LambdaWeb/refl.v
+LambdaWeb/dpe.v
+LambdaWeb/comp.v
+LambdaWeb/erase.v
+LambdaWeb/anno.v
+LambdaWeb/pipeline.v
 
 # Codegen
 Codegen/tactics.v
