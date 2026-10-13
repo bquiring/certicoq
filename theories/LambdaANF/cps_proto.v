@@ -1,17 +1,17 @@
-(* The stack-of-frames one-hole contexts, with the right indices, are isomorphic to 
-   [cps.exp_ctx] and [cps.fundefs_ctx] *)
+(* The stack-of-frames one-hole contexts, with the right indices, are isomorphic to
+   [term.exp_ctx] and [term.fundefs_ctx] *)
 
-From Coq Require Import ZArith.ZArith Lists.List Sets.Ensembles Strings.String.
-Require Import Lia.
+From Stdlib Require Import ZArith.ZArith Lists.List Sets.Ensembles Strings.String.
+From Stdlib Require Import Lia.
 Import ListNotations.
-From CertiCoq.Common Require AstCommon.
-From CertiCoq.LambdaANF Require Import
-     Prototype cps cps_util ctx
+From CertiRocq.Common Require AstCommon.
+From CertiRocq.LambdaANF Require Import
+     Prototype term term_util ctx
      identifiers Ensembles_util.
 
-From MetaCoq Require Import Template.All.
+From MetaRocq Require Import Template.All.
 
-From CertiCoq.LambdaANF Require Import PrototypeGenFrame cps cps_proto_univ.
+From CertiRocq.LambdaANF Require Import PrototypeGenFrame term cps_proto_univ.
 
 (* Print exp_univ. *)
 (* Print exp_univD. *)
@@ -28,9 +28,9 @@ Open Scope list_scope.
 (* The type of one-hole contexts *)
 Definition exp_c : exp_univ -> exp_univ -> Set := frames_t.
 
-(* cps.exp_ctx -> exp_c _ _ *)
+(* term.exp_ctx -> exp_c _ _ *)
 
-Definition c_of_ces (ces : list (cps.ctor_tag * cps.exp)) :
+Definition c_of_ces (ces : list (term.ctor_tag * term.exp)) :
   exp_c exp_univ_list_prod_ctor_tag_exp exp_univ_list_prod_ctor_tag_exp :=
   fold_right
     (fun '(c, e) frames =>
@@ -38,8 +38,8 @@ Definition c_of_ces (ces : list (cps.ctor_tag * cps.exp)) :
     <[]>
     ces.
 
-Definition c_of_ces_ctx' c_of_exp_ctx (ces1 : list (cps.ctor_tag * cps.exp)) (c : cps.ctor_tag)
-           (C : exp_ctx) (ces2 : list (cps.ctor_tag * cps.exp))
+Definition c_of_ces_ctx' c_of_exp_ctx (ces1 : list (term.ctor_tag * term.exp)) (c : term.ctor_tag)
+           (C : exp_ctx) (ces2 : list (term.ctor_tag * term.exp))
   : exp_c exp_univ_exp exp_univ_list_prod_ctor_tag_exp :=
   c_of_ces ces1
     >++ <[cons_prod_ctor_tag_exp0 ces2; pair_ctor_tag_exp1 c]>
@@ -69,16 +69,16 @@ Defined.
 
 Definition c_of_ces_ctx := c_of_ces_ctx' c_of_exp_ctx.
 
-(* exp_c _ _ -> cps.exp_ctx: directly writing a recursive function on exp_c is annoying because
-   of the indices. Instead map each frame to a "slice" of an exp_ctx represented as a function 
-   ctx |-> slice + ctx. Then all the functions can be composed together and initialized with 
+(* exp_c _ _ -> term.exp_ctx: directly writing a recursive function on exp_c is annoying because
+   of the indices. Instead map each frame to a "slice" of an exp_ctx represented as a function
+   ctx |-> slice + ctx. Then all the functions can be composed together and initialized with
    the empty context. *)
 
 Definition univ_rep (A : exp_univ) : Set :=
   match A with
-  | exp_univ_prod_ctor_tag_exp => cps.ctor_tag * exp_ctx
+  | exp_univ_prod_ctor_tag_exp => term.ctor_tag * exp_ctx
   | exp_univ_list_prod_ctor_tag_exp =>
-    list (cps.ctor_tag * cps.exp) * cps.ctor_tag * exp_ctx * list (cps.ctor_tag * cps.exp)
+    list (term.ctor_tag * term.exp) * term.ctor_tag * exp_ctx * list (term.ctor_tag * term.exp)
   | exp_univ_fundefs => fundefs_ctx
   | exp_univ_exp => exp_ctx
   | exp_univ_var => False
@@ -87,7 +87,7 @@ Definition univ_rep (A : exp_univ) : Set :=
   | exp_univ_prim => False
   | exp_univ_N => False
   | exp_univ_list_var => False
-  | exp_univ_primitive => False
+  | exp_univ_primitive_value => False
   end.
 
 Definition exp_frame_rep {A B} (f : exp_frame_t A B) : univ_rep A -> univ_rep B.
@@ -236,13 +236,13 @@ Class Iso A B := {
 Notation "'![' e ']'" := (isoBofA e).
 Notation "'[' e ']!'" := (isoAofB e).
 
-Instance Iso_exp_c_exp_ctx : Iso (exp_c exp_univ_exp exp_univ_exp) exp_ctx := {
+#[global] Instance Iso_exp_c_exp_ctx : Iso (exp_c exp_univ_exp exp_univ_exp) exp_ctx := {
   isoAofB := c_of_exp_ctx;
   isoBofA := exp_ctx_of_c;
   isoABA := c_exp_ctx_c;
   isoBAB := exp_ctx_c_exp_ctx }.
 
-Instance Iso_fundefs_c_fundefs_ctx : Iso (exp_c exp_univ_exp exp_univ_fundefs) fundefs_ctx := {
+#[global] Instance Iso_fundefs_c_fundefs_ctx : Iso (exp_c exp_univ_exp exp_univ_fundefs) fundefs_ctx := {
   isoAofB := c_of_fundefs_ctx;
   isoBofA := fundefs_ctx_of_c;
   isoABA := c_fundefs_ctx_c;
@@ -352,13 +352,13 @@ Proof. revert D; iso C; intros D; iso D; mk_corollary comp_fundefs_ctx_eq. Qed.
 
 (* ---------- Facts about used variables ---------- *)
 
-Fixpoint used_ces (ces : list (ctor_tag * exp)) : Ensemble cps.var :=
+Fixpoint used_ces (ces : list (ctor_tag * exp)) : Ensemble term.var :=
   match ces with
   | [] => Empty_set _
   | (_, e) :: ces => used_vars e :|: used_ces ces
   end.
 
-Definition used {A} : univD A -> Ensemble cps.var :=
+Definition used {A} : univD A -> Ensemble term.var :=
   match A with
   | exp_univ_prod_ctor_tag_exp => fun '(_, e) => used_vars e
   | exp_univ_list_prod_ctor_tag_exp => used_ces
@@ -370,14 +370,14 @@ Definition used {A} : univD A -> Ensemble cps.var :=
   | exp_univ_prim => fun _ => Empty_set _
   | exp_univ_N => fun _ =>  Empty_set _
   | exp_univ_list_var => fun xs => FromList xs
-  | exp_univ_primitive => fun _ => Empty_set _
+  | exp_univ_primitive_value => fun _ => Empty_set _
   end.
 
 (*
 (* TODO: use a prettier definition in terms of greatest lower bound of all [frameD f x]s.
    Then show that for every hole type can find x1, x2 such that
      glb_x (frameD f x) = frameD f x1 ∩ frameD f x2 *)
-Definition used_c {A B} (C : exp_c A B) : Ensemble cps.var :=
+Definition used_c {A B} (C : exp_c A B) : Ensemble term.var :=
   fun x => forall e, In _ (used (C ⟦+ e +⟧)) x.
 
 Local Ltac clearpose H x e :=
@@ -405,7 +405,7 @@ Proof.
   - specialize (Hx []); inversion Hx.
 Qed. *)
 
-Definition used_frame {A B} (f : exp_frame_t A B) : Ensemble cps.var. refine (
+Definition used_frame {A B} (f : exp_frame_t A B) : Ensemble term.var. refine (
   match f with
   | pair_ctor_tag_exp0 e => used_vars e
   | pair_ctor_tag_exp1 c => Empty_set _
@@ -462,7 +462,7 @@ Proof.
     rewrite IHces; eauto with Ensembles_DB.
 Qed.
 
-Fixpoint used_c {A B} (C : exp_c A B) : Ensemble cps.var :=
+Fixpoint used_c {A B} (C : exp_c A B) : Ensemble term.var :=
   match C with
   | <[]> => Empty_set _
   | C >:: f => used_c C :|: used_frame f
@@ -529,8 +529,8 @@ Definition decompose_fd_c := @decompose_fd_c' exp_univ_fundefs exp_univ_exp.
 #[global] Instance exp_Frame_inj : Frame_inj (U:=exp_univ).
 Proof. intros A B f x y; destruct f; now inversion 1. Qed.
 
-Require Import Coq.Logic.JMeq.
-Require Import Coq.Logic.Eqdep.
+From Stdlib Require Import Logic.JMeq.
+From Stdlib Require Import Logic.Eqdep.
 Ltac inv_ex :=
   repeat progress match goal with
   | H : existT ?P ?T _ = existT ?P ?T _ |- _ => apply inj_pairT2 in H
@@ -551,8 +551,8 @@ Class Inhabited A := inhabitant : A.
 
 Import PrimInt63.
 
-Global Instance Inhabited_primitive : Inhabited AstCommon.primitive := 
-  { inhabitant := existT _ Primitive.primInt 0%uint63 }.  
+Global Instance Inhabited_primitive_value : Inhabited AstCommon.primitive_value :=
+  { inhabitant := existT _ AstCommon.primInt 0%uint63 }.
 
 Definition univ_inhabitant {A} : univD A :=
   match A with
@@ -566,14 +566,14 @@ Definition univ_inhabitant {A} : univD A :=
   | exp_univ_prim => inhabitant
   | exp_univ_N => inhabitant
   | exp_univ_list_var => inhabitant
-  | exp_univ_primitive => inhabitant
+  | exp_univ_primitive_value => inhabitant
   end.
 
 Class Sized A := size : A -> nat.
 
 #[global] Instance Sized_pos : Sized positive := fun _ => S O.
 #[global] Instance Sized_N : Sized N := fun _ => S O.
-#[global] Instance Sized_primitive : Sized AstCommon.primitive := fun _ => S O.
+#[global] Instance Sized_primitive : Sized AstCommon.primitive_value := fun _ => S O.
 
 Definition size_list {A} (size : A -> nat) : list A -> nat := fold_right (fun x n => S (size x + n)) 1%nat.
 Definition size_prod {A B} (sizeA : A -> nat) (sizeB : B -> nat) : A * B -> nat := fun '(x, y) => S (sizeA x + sizeB y).
@@ -616,7 +616,7 @@ Definition univ_size {A} : univD A -> nat :=
   | exp_univ_prim => size
   | exp_univ_N => size
   | exp_univ_list_var => size
-  | exp_univ_primitive => size
+  | exp_univ_primitive_value => size
   end.
 
 Lemma size_app {A} `{Sized A} (xs ys : list A) : size (xs ++ ys) < size xs + size ys.
@@ -626,11 +626,50 @@ Lemma frame_size_gt {A B} (f : exp_frame_t A B) (x : univD A) :
   (univ_size (frameD f x) > univ_size x)%nat.
 Proof.
   destruct f; cbn;
-  try change (size_exp x) with (size x); cbn;
+    try change (size_exp x) with (size x); cbn;
   try change (size_fundefs x) with (size x); cbn;
   try change (size_list (size_prod size size) x) with (size x); cbn;
   try change (size x) with 1; cbn;
   try lia.
+
+  change ((fix size_exp (e : exp) : nat :=
+            match e with
+            | Ecase _ ces => S (S (size_list (size_prod size size_exp) ces))
+            | Eproj _ _ _ _ e0 => S (S (S (S (S (size_exp e0)))))
+            | Eletapp _ _ _ ys e0 => S (S (S (S (size ys + size_exp e0))))
+            | Efun fds e0 => S (size_fundefs fds + size_exp e0)
+            | Eapp _ _ xs => S (S (S (size xs)))
+            | Eprim_val _ _ e0 => S (S (S (size_exp e0)))
+            | Econstr _ _ ys e0 | Eprim _ _ ys e0 => S (S (S (size ys + size_exp e0)))
+            | Ehalt x0 => S (size x0)
+            end
+            with size_fundefs (fds : fundefs) : nat :=
+              match fds with
+              | Fcons _ _ xs e fds0 => S (S (S (size xs + size_exp e + size_fundefs fds0)))
+              | Fnil => 1
+              end
+                for
+                size_exp) x) with (size x).
+  cbn. lia.
+  change ((fix size_exp (e0 : exp) : nat :=
+             match e0 with
+             | Ecase _ ces => S (S (size_list (size_prod size size_exp) ces))
+             | Eproj _ _ _ _ e1 => S (S (S (S (S (size_exp e1)))))
+             | Eletapp _ _ _ ys e1 => S (S (S (S (size ys + size_exp e1))))
+             | Efun fds e1 => S (size_fundefs fds + size_exp e1)
+             | Eapp _ _ xs => S (S (S (size xs)))
+             | Eprim_val _ _ e1 => S (S (S (size_exp e1)))
+             | Econstr _ _ ys e1 | Eprim _ _ ys e1 => S (S (S (size ys + size_exp e1)))
+             | Ehalt x0 => S (size x0)
+             end
+             with size_fundefs (fds : fundefs) : nat :=
+               match fds with
+               | Fcons _ _ xs e0 fds0 => S (S (S (size xs + size_exp e0 + size_fundefs fds0)))
+               | Fnil => 1
+               end
+                 for
+                 size_fundefs) x) with (size x).
+  cbn. lia.
 Qed.
 
 Lemma exp_c_size_ge {A B} (C : exp_c A B) (x : univD A) :

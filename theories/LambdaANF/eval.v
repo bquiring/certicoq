@@ -1,16 +1,16 @@
-From Coq Require Import NArith.BinNat Relations.Relations MSets.MSets
+From Stdlib Require Import NArith.BinNat Relations.Relations MSets.MSets
      MSets.MSetRBT Lists.List micromega.Lia Sets.Ensembles
      Relations.Relations.
 
-From CertiCoq.Common Require Import AstCommon exceptionMonad.
+From CertiRocq.Common Require Import AstCommon exceptionMonad.
 
-From CertiCoq Require Import LambdaANF.cps LambdaANF.List_util LambdaANF.size_cps LambdaANF.ctx LambdaANF.cps_util LambdaANF.set_util LambdaANF.map_util
+From CertiRocq Require Import LambdaANF.term LambdaANF.List_util LambdaANF.size_cps LambdaANF.ctx LambdaANF.term_util LambdaANF.set_util LambdaANF.map_util
      LambdaANF.identifiers LambdaANF.tactics LambdaANF.Ensembles_util.
 
 Require Import compcert.lib.Coqlib.
-Require Import LambdaANF.algebra. 
+Require Import LambdaANF.algebra.
 
-Require Import MetaCoq.Utils.bytestring.
+Require Import MetaRocq.Utils.bytestring.
 
 Import ListNotations.
 
@@ -38,11 +38,11 @@ Section EVAL.
   | OOT
   | Res : A -> res.
 
-  
+
   Context {fuel : Type} {Hf : @fuel_resource fuel} {trace : Type} {Ht : @trace_resource trace}.
 
   Open Scope alg_scope.
-  
+
   Inductive bstep :  env -> exp -> fuel -> @res val -> trace -> Prop :=
   | BStept_constr :
       forall (x : var) (t : ctor_tag) (ys :list var) (e : exp)
@@ -136,7 +136,7 @@ Section EVAL.
 
   Scheme bstep_ind' := Minimality for bstep Sort Prop
     with bstep_fuel_ind' := Minimality for bstep_fuel Sort Prop.
-  
+
   Definition not_stuck (rho : env) (e : exp) :=
     (exists cin v cout, bstep_fuel rho e cin (Res v) cout) \/
     (forall cin, exists cout, bstep_fuel rho e cin OOT cout).
@@ -209,7 +209,7 @@ Section EVAL.
     intros H1 H2. eapply step_deterministic_aux; eauto.
   Qed.
 
-        
+
   Lemma bstep_lt_OOT_aux rho e r cin (v : val) cout cin':
     bstep rho e cin r cout ->
     r = Res v ->
@@ -235,8 +235,8 @@ Section EVAL.
         do 2 eexists. split. eapply BStept_letapp_oot; eauto. rewrite plus_assoc. rewrite (plus_comm x0).
         rewrite <- plus_assoc. reflexivity.
       + inv H5. rewrite (plus_comm cin1) in Hlt. eapply plus_stable in Hlt.
-        edestruct IHHstep0. reflexivity. eassumption. destructAll. 
-        do 2 eexists. split. rewrite plus_comm. 
+        edestruct IHHstep0. reflexivity. eassumption. destructAll.
+        do 2 eexists. split. rewrite plus_comm.
         eapply BStept_letapp; eauto.
         rewrite <- !plus_assoc. rewrite (plus_comm cout1). reflexivity.
     - inv Heq.
@@ -257,7 +257,7 @@ Section EVAL.
   Proof.
     intros Hbstep Hlt. eapply bstep_lt_OOT_aux; eauto.
   Qed.
-  
+
   Lemma bstep_fuel_lt_OOT rho e v cin cout cin' :
     bstep_fuel rho e cin (Res v) cout ->
     cin' << cin ->
@@ -272,7 +272,7 @@ Section EVAL.
         do 2 eexists. split. econstructor 2. eassumption. rewrite plus_assoc. reflexivity.
   Qed.
 
-  
+
   Lemma bstep_OOT_subtrace_aux rho e (r : @res val) v cin cout cin' cout' :
     bstep rho e cin r cout ->
     r = Res v ->
@@ -290,7 +290,7 @@ Section EVAL.
                   bstep_fuel rho e cin' OOT cout' ->
                   (exists c', cout = (c' <+> cout'))).
     intros Hstep. revert v cin' cout'.
-    induction Hstep using bstep_ind' with (P := P) (P0 := P0); unfold P, P0 in *;    
+    induction Hstep using bstep_ind' with (P := P) (P0 := P0); unfold P, P0 in *;
     intros v1 cin' cout' Heq Hs'; try (now subst; inv Hs'; repeat subst_exp; eauto).
     - inv Hs'; repeat subst_exp. eapply find_tag_nth_deterministic in H8; [| clear H8; eauto ]. inv H8.
       eapply IHHstep; eauto.
@@ -331,8 +331,8 @@ Section EVAL.
       rewrite plus_assoc at 1. reflexivity.
   Qed.
 
-  
-  Lemma bstep_OOT_determistic_aux rho e (r r' : @res val) cin cout cin' cout' c :    
+
+  Lemma bstep_OOT_determistic_aux rho e (r r' : @res val) cin cout cin' cout' c :
     bstep rho e cin r cout ->
     r = OOT ->
     cin = (c <+> cin') ->
@@ -360,21 +360,21 @@ Section EVAL.
       + eapply bstep_fuel_deterministic in H18; [| clear H18; eauto ]; destructAll.
         rewrite !(plus_comm cin0), <- plus_assoc in Hleq.
         eapply plus_inv in Hleq. subst.
-        edestruct IHHstep0; [| | eassumption | ]; eauto. destructAll. split; eauto. eexists. 
+        edestruct IHHstep0; [| | eassumption | ]; eauto. destructAll. split; eauto. eexists.
         rewrite <- (plus_assoc cout0). rewrite (plus_comm cout0) at 1.
         rewrite plus_assoc at 1. reflexivity.
       + split. reflexivity.
         eapply bstep_fuel_OOT_subtrace in H3; [| eassumption ]. destructAll.
         eexists.
         rewrite (plus_assoc x0). rewrite (plus_comm cout') at 1.
-        rewrite <- plus_assoc at 1. reflexivity.      
+        rewrite <- plus_assoc at 1. reflexivity.
     - inv Hs'; repeat subst_exp; eauto. exfalso.
       eapply IHHstep in H17; eauto. inv H17. congruence.
       rewrite (plus_comm cin1). rewrite <- plus_assoc. reflexivity.
     - inv Hs'; eauto.
       + split; eauto. eexists <0>. rewrite plus_zero. reflexivity.
       + rewrite <- plus_assoc, plus_comm in H. eapply plus_lt in H.
-        eapply lt_antisym in H. contradiction. 
+        eapply lt_antisym in H. contradiction.
     - inv Hs'; eauto.
       + split; eauto. eexists. rewrite (plus_comm _ <0>). rewrite plus_zero. reflexivity.
       + rewrite <- plus_assoc in Hleq. eapply plus_inv in Hleq. subst.
@@ -399,7 +399,7 @@ Section EVAL.
     - inv Hs2; eauto.
       + split; eauto. eexists <0>. rewrite plus_zero. reflexivity.
       + rewrite <- plus_assoc, plus_comm in H. eapply plus_lt in H.
-        eapply lt_antisym in H. contradiction. 
+        eapply lt_antisym in H. contradiction.
     - inv Hs2; eauto.
       + split; eauto. eexists. rewrite (plus_comm _ <0>). rewrite plus_zero. reflexivity.
       + rewrite <- plus_assoc in H. eapply plus_inv in H. subst.
@@ -409,7 +409,7 @@ Section EVAL.
   Qed.
 
 
-  
+
   Lemma bstep_gt_aux rho e r cin (v : val) cout cin' r' cout' :
     bstep rho e cin r cout ->
     r = Res v -> cin << cin' ->
@@ -432,17 +432,17 @@ Section EVAL.
     - inv Hstep'; repeat subst_exp; eauto.
       eapply find_tag_nth_deterministic in H8; [| clear H8; eauto ]. inv H8.
       eapply IHHstep; eauto.
-    - inv Hstep'; repeat subst_exp; eauto. 
+    - inv Hstep'; repeat subst_exp; eauto.
       + eapply bstep_fuel_deterministic in H18; [| clear H18; eauto ]; destructAll.
         eapply IHHstep0; [| | eapply H19 ]. reflexivity.
-        rewrite !(plus_comm cin0) in Hlt. eapply plus_stable in Hlt. 
+        rewrite !(plus_comm cin0) in Hlt. eapply plus_stable in Hlt.
         eassumption.
       + eapply IHHstep; [| | eassumption ]. reflexivity.
         eapply plus_lt. eapply Hlt.
     - inv Hstep'. eapply lt_antisym in Hlt. contradiction.
     - inv Hstep'.
       + rewrite plus_comm in Hlt. eapply plus_lt in Hlt.
-        eapply lt_trans in Hlt. specialize (Hlt H). eapply lt_antisym in Hlt. eassumption. 
+        eapply lt_trans in Hlt. specialize (Hlt H). eapply lt_antisym in Hlt. eassumption.
       + eapply IHHstep; [| | eassumption ]. reflexivity.
         eapply plus_stable in Hlt. eassumption.
   Qed.
@@ -462,7 +462,7 @@ Section EVAL.
   Proof.
     intros Hstep Hlt Hstep'. inv Hstep. inv Hstep'.
     - rewrite plus_comm in Hlt. eapply plus_lt in Hlt.
-      eapply lt_trans in Hlt. specialize (Hlt H0). eapply lt_antisym in Hlt. eassumption. 
+      eapply lt_trans in Hlt. specialize (Hlt H0). eapply lt_antisym in Hlt. eassumption.
     - eapply bstep_gt; [| | eassumption ]. eassumption.
       eapply plus_stable in Hlt. eassumption.
   Qed.
@@ -483,7 +483,7 @@ Section EVAL.
                    r = OOT ->
                    cin = (c <+> cin') ->
                    exists cout' c, bstep_fuel rho e cin' OOT cout' /\ cout = (c <+> cout')).
-    intros Hstep. revert c cin'. 
+    intros Hstep. revert c cin'.
     induction Hstep using bstep_ind' with (P := P) (P0 := P0); unfold P, P0 in *;
       intros c' cin' Heq Hleq; subst;
         try now (edestruct IHHstep; eauto; destructAll; do 2 eexists; split;
@@ -501,7 +501,7 @@ Section EVAL.
     - do 2 eexists. split. econstructor 1. eapply plus_lt. rewrite plus_comm. eassumption.
       rewrite plus_zero. reflexivity.
     - edestruct (lt_all_dec cin' (one e)).
-      + do 2 eexists. split. 
+      + do 2 eexists. split.
         now econstructor; eauto. rewrite (plus_comm _ <0>). rewrite plus_zero. reflexivity.
       + destructAll. rewrite <- plus_assoc in Hleq. eapply plus_inv in Hleq. subst.
         edestruct IHHstep. reflexivity. reflexivity. destructAll.
@@ -523,20 +523,20 @@ Section EVAL.
     - do 2 eexists. split. econstructor 1. eapply plus_lt. rewrite plus_comm. eassumption.
       rewrite plus_zero. reflexivity.
     - edestruct (lt_all_dec c2 (one e)).
-      + do 2 eexists. split. 
+      + do 2 eexists. split.
         now econstructor; eauto. rewrite (plus_comm _ <0>). rewrite plus_zero. reflexivity.
       + destructAll. rewrite <- plus_assoc in H. eapply plus_inv in H. subst.
         edestruct bstep_OOT_monotonic. eassumption. destructAll.
         do 2 eexists. split. econstructor 2; eauto. rewrite plus_assoc. reflexivity.
   Qed.
 
-  
+
   Lemma bstep_fuel_zero_OOT rho e :
     bstep_fuel rho e <0> OOT <0>.
   Proof.
     econstructor. eapply zero_one_lt.
   Qed.
-    
+
   Lemma bstep_deterministic_res rho e cin r r' cout cout' :
     bstep rho e cin r cout ->
     bstep rho e cin r' cout' ->
@@ -552,8 +552,8 @@ Section EVAL.
                   r = r' /\ cout = cout').
     intros Hstep.
     revert r' cout'.
-    induction Hstep using bstep_ind' with (P := P) (P0 := P0); unfold P, P0 in *; intros r' cout' Hstep';   
-      try now (inv Hstep'; repeat subst_exp; eapply IHHstep; eauto). 
+    induction Hstep using bstep_ind' with (P := P) (P0 := P0); unfold P, P0 in *; intros r' cout' Hstep';
+      try now (inv Hstep'; repeat subst_exp; eapply IHHstep; eauto).
     - inv Hstep'. repeat subst_exp.
       eapply find_tag_nth_deterministic in H1; [| eapply H8 ]. inv H1.
       eapply IHHstep; eauto.
@@ -562,8 +562,8 @@ Section EVAL.
         rewrite !(plus_comm cin0) in H10. eapply plus_inv in H10.
         subst. edestruct IHHstep0. eapply H19. subst. now eauto.
       + rewrite plus_comm in H18. eapply bstep_fuel_OOT_monotonic in H18. destructAll.
-        eapply IHHstep in H5. inv H5. congruence. 
-    - inv Hstep'; repeat subst_exp; eauto.       
+        eapply IHHstep in H5. inv H5. congruence.
+    - inv Hstep'; repeat subst_exp; eauto.
       eapply bstep_fuel_OOT_determistic in H17. inv H17. congruence.
       rewrite plus_comm. eassumption.
     - inv Hstep'. repeat subst_exp; eauto.
@@ -585,8 +585,8 @@ Section EVAL.
     eapply plus_inv in H0. subst. eapply bstep_deterministic_res  in H; [| eassumption ].
     destructAll. eauto.
   Qed.
-  
-  
+
+
   Definition diverge (rho : env) (e: exp) : Prop :=
     forall cin, exists cout, bstep_fuel rho e cin OOT cout.
 
@@ -738,7 +738,7 @@ Section EVAL.
         C <> Hole_c ->
         interpret_ctx C rho cin r cout ->
         interpret_ctx_fuel C rho (cin <+> one_ctx C) r (cout <+> one_ctx C).
-  
+
 
   Lemma interpret_ctx_bstep_l C e rho v cin cout:
     bstep_fuel rho (C|[ e ]|) cin (Res v) cout ->
@@ -753,15 +753,15 @@ Section EVAL.
     - simpl in Hb. eexists rho, (@zero _ fuel _), <0>, cin, cout. split; [| split; eauto ].
       rewrite plus_zero. reflexivity.
       rewrite plus_zero. reflexivity.
-      econstructor. econstructor. eassumption. 
+      econstructor. econstructor. eassumption.
     - simpl in Hb, Hi. inv Hb. inv H.
-      edestruct IHC. eassumption. eassumption. destructAll. 
+      edestruct IHC. eassumption. eassumption. destructAll.
       do 5 eexists. split; [| split ].
       3:{ split. econstructor 3. now congruence. econstructor; eauto. eassumption. }
       rewrite !plus_assoc. rewrite (plus_comm x2). reflexivity.
       rewrite !plus_assoc. rewrite (plus_comm x3). reflexivity.
     - simpl in Hb, Hi. inv Hb. inv H.
-      edestruct IHC. eassumption. eassumption. destructAll. 
+      edestruct IHC. eassumption. eassumption. destructAll.
       do 5 eexists. split; [| split ].
       3:{ split. econstructor 3. now congruence. econstructor; eauto. eassumption. }
       rewrite !plus_assoc. rewrite (plus_comm x2). reflexivity.
@@ -769,14 +769,14 @@ Section EVAL.
     - simpl in Hb, Hi. inv Hb. inv H.
     - simpl in Hb, Hi. inv Hb. inv H.
     - simpl in Hb, Hi. inv Hb. inv H.
-      edestruct IHC. eassumption. eassumption. destructAll. repeat subst_exp. 
-      do 5 eexists. split; [| split ]. 
+      edestruct IHC. eassumption. eassumption. destructAll. repeat subst_exp.
+      do 5 eexists. split; [| split ].
       3:{ split; [| eassumption ].
           econstructor 3. now congruence. econstructor; eauto. }
       rewrite !plus_assoc. rewrite (plus_comm x2). reflexivity.
       rewrite !plus_assoc. rewrite (plus_comm x3). reflexivity.
     - simpl in Hb, Hi. inv Hb. inv H.
-      edestruct IHC. eassumption. eassumption. destructAll. 
+      edestruct IHC. eassumption. eassumption. destructAll.
       do 5 eexists. split; [| split ].
       3:{ split. econstructor 3. now congruence. econstructor; eauto. eassumption. }
       rewrite !plus_assoc. rewrite (plus_comm x2). reflexivity.
@@ -796,7 +796,7 @@ Section EVAL.
     - inv Hi. simpl. rewrite !plus_zero. eassumption. inv H0.
     - inv Hi. inv H0. simpl.
       rewrite !plus_assoc, !(plus_comm (one_ctx _)), <- !plus_assoc.
-      econstructor. rewrite !plus_assoc. econstructor; eauto.       
+      econstructor. rewrite !plus_assoc. econstructor; eauto.
   Qed.
 
   Lemma interpret_ctx_OOT_bstep C e rho cin cout:
@@ -840,27 +840,27 @@ Section EVAL.
     bstep_fuel rho (C |[ Eprim x p xs e1 ]|) cin OOT cout ->
     interprable C = true ->
     bstep_fuel rho (C |[ Eprim x p xs e2 ]|) cin OOT cout.
-  Proof.       
+  Proof.
     revert rho cin cout.
     induction C; intros rho cin cout Hs Hi; eauto;
       try congruence;
-      try now (inv Hs; 
+      try now (inv Hs;
                [ econstructor; eassumption |
                  inv H; unfold one; simpl;
                  constructor 2; econstructor; eauto ]).
 
     Unshelve. exact 0%nat.
   Qed.
-  
+
   Lemma eval_ctx_app_OOT_Eprim_val rho C x p e1 e2 cin cout :
     bstep_fuel rho (C |[ Eprim_val x p e1 ]|) cin OOT cout ->
     interprable C = true ->
     bstep_fuel rho (C |[ Eprim_val x p e2 ]|) cin OOT cout.
-  Proof.       
+  Proof.
     revert rho cin cout.
     induction C; intros rho cin cout Hs Hi; eauto;
       try congruence;
-      try now (inv Hs; 
+      try now (inv Hs;
                [ econstructor; eassumption |
                  inv H; unfold one; simpl;
                  constructor 2; econstructor; eauto ]).
@@ -876,13 +876,13 @@ Section EVAL.
     revert rho e cin cout.
     induction C; intros rho e1 cin cout Hs Hi; eauto;
       try congruence;
-      try now (inv Hs; 
+      try now (inv Hs;
                [ econstructor; eassumption |
                  inv H; unfold one; simpl; constructor 2; econstructor; eauto ]).
-    
+
     Unshelve. exact 0%nat.
   Qed.
-      
+
   Lemma eval_ctx_app_Ehalt_div rho C e cin cout x :
     bstep_fuel rho (C |[ Ehalt x ]|) cin OOT cout ->
     interprable C = true ->
@@ -891,17 +891,17 @@ Section EVAL.
     revert rho e cin cout.
     induction C; intros rho e1 cin cout Hs Hi; eauto;
       try congruence;
-      try now (inv Hs; 
+      try now (inv Hs;
                [ econstructor; eassumption |
                  inv H; unfold one; simpl; constructor 2; econstructor; eauto ]).
     simpl in *. inv Hs.
     2:{ inv H. }
     econstructor. unfold one. erewrite one_eq. eassumption.
-    
+
     Unshelve. exact 0%nat.
   Qed.
-  
-    
+
+
   Lemma interpret_ctx_eq_env_P S C rho rho' cin cout :
     interpret_ctx_fuel C rho cin (Res rho') cout ->
     Disjoint _ (bound_var_ctx C) S ->
@@ -1029,7 +1029,7 @@ Section EVAL.
           -- left. eapply ctx_step. congruence. econstructor; eauto.
           -- destructAll. right. do 5 eexists.
              split; [| split ].
-             econstructor. congruence. now econstructor; eauto. eassumption. split. 
+             econstructor. congruence. now econstructor; eauto. eassumption. split.
              rewrite (plus_assoc _ _ x1), (plus_comm (one_ctx _) x1), <- !plus_assoc. reflexivity.
              rewrite (plus_assoc _ _ x3), (plus_comm (one_ctx _) x3), <- !plus_assoc. reflexivity.
           -- eassumption.
@@ -1056,7 +1056,7 @@ Section EVAL.
     end.
 
   (* TODO : Small step for letapp? *)
-  (* 
+  (*
   Definition sstep_f (rho:env) (e:exp) : exception (env* exp) :=
     match e with
       | Eprim x f ys e' =>
@@ -1128,7 +1128,7 @@ Section EVAL.
    *)
 
   Open Scope bs_scope.
-  
+
   (* Either fail with an Exn, runs out of fuel and return (Ret) inl of the current state or finish to evaluate and return inr of a val *)
   Fixpoint bstep_f (rho:env) (e:exp) (n:nat): exception ((env * exp) + val) :=
     match n with
@@ -1209,8 +1209,8 @@ Section EVAL.
            end)
         end)
     end.
-  
-    
+
+
   (** Small step semantics -- Relational definition *)
   Inductive step: state -> state -> Prop :=
   | Step_constr: forall vs rho x t ys e,
@@ -1313,8 +1313,8 @@ Section EVAL.
       forall (rho : env) (fl : fundefs) (e : exp) (v : val) (c : nat),
         bstep_e (def_funs fl fl rho rho) e v c ->
         bstep_e rho (Efun fl e) v c
-  | BStep_prim_val : 
-    forall (rho' rho : env) (x : var) (p : primitive)
+  | BStep_prim_val :
+    forall (rho' rho : env) (x : var) (p : primitive_value)
              (e : exp) (v : val) (c : nat),
         M.set x (Vprim p) rho = rho' ->
         bstep_e rho' e v c ->
@@ -1399,13 +1399,13 @@ Section EVAL.
         (* TODO eventually remove the unit cost, it helps but it shouldn't be required *)
         bstep_cost rho (Efun B e) v (c + (1 + PS.cardinal (fundefs_fv B)))
   | BStepc_prim_val :
-      forall (rho' rho : env) (x : var) (p : primitive)
+      forall (rho' rho : env) (x : var) (p : primitive_value)
              (e : exp)
              (v v' : val) (c : nat),
         M.set x (Vprim p) rho = rho' ->
         bstep_cost rho' e v' c ->
         bstep_cost rho (Eprim_val x p e) v' (c + 1)
-  
+
   | BStepc_prim :
       forall (vs : list val) (rho' rho : env) (x : var) (f : prim)
              (f' : list val -> option val) (ys : list var) (e : exp)
@@ -1498,7 +1498,7 @@ Section EVAL.
       econstructor; eauto.
     - simpl in H. apply IHn in H.
       destruct H as [m ev]; exists m.
-      simpl. cbn. econstructor; eauto. 
+      simpl. cbn. econstructor; eauto.
     - destruct (get_list l rho) eqn:glr; [| inv H].
       destruct (M.get p pr) eqn:ppr; [| inv H].
       destruct (o l0) eqn:ol0; [| inv H].
@@ -1585,7 +1585,7 @@ Section EVAL.
 
 
    *)
-  
+
   (** Reflexive transitive closure of the small-step relation *)
   Definition mstep : relation state := clos_refl_trans_1n state step.
 
@@ -1689,406 +1689,7 @@ Section EVAL.
 End EVAL.
 
 
-
 Ltac destruct_bstep :=
   match goal with
   | [ H : bstep _ _ _ _ _ |- _ ] => inv H
   end.
-
-
-(** The following are not used anywhere. They have to do either with "well-typedness"
- * or observable values. We need to go through them to decide if can can throw them
- * away altogether. *)
-(* Inductive observable_val: val -> Prop := *)
-(* | obv_int : forall i, observable_val (Vint i) *)
-(* | obv_obvs : forall t, observable_val (Vobv t). *)
-
-(* may want to force all vals in the list to be observable? *)
-(* Inductive obs_val: Type := *)
-(* | Obs : forall vs:list val, type -> Forall observable_val vs -> obs_val. *)
-
-(* if only consider ints and observers (i.e observable_val), syntactic
-     equality on val is the desired notion of equality. *)
-
-(* Definition val_proper: val -> Prop := observable_val.  *)
-(* Definition val_equiv: val -> val -> Prop := @eq val.  *)
-
-(* Theorem val_equiv_eq_rel: Equivalence (val_equiv). *)
-(* Proof. *)
-(*   constructor; red. *)
-(*   + intros. reflexivity. *)
-(*   + intros. inversion H. reflexivity. *)
-(*   + intros. inversion H. inversion H0. reflexivity. *)
-(* Qed.   *)
-
-(* Definition obs_val_proper: obs_val -> Prop := fun _ => True. *)
-(* Definition obs_val_equiv: relation obs_val := *)
-(*   fun vso1 vso2 => match vso1, vso2 with *)
-(*                      | Obs vs1 t1 vsop1, Obs vs2 t2 vsop2 => Forall2 (val_equiv) vs1 vs2 end. *)
-
-
-(* Theorem obs_val_equiv_eq_rel: Equivalence (obs_val_equiv). *)
-(* Proof. *)
-(*   assert (Equivalence (Forall2 val_equiv)). apply forall2_eq_rel. *)
-(*   apply val_equiv_eq_rel. constructor; red; intros. *)
-(*   + unfold obs_val_equiv. destruct x. apply H. *)
-(*   + unfold obs_val_equiv. unfold obs_val_equiv in H0. *)
-(*     destruct x; destruct y. revert H0. apply H. *)
-(*   + unfold obs_val_equiv. unfold obs_val_equiv in H0. *)
-(*     unfold obs_val_equiv in H1. *)
-(*     destruct x; destruct y; destruct z. revert H1; revert H0. apply H. *)
-(* Qed. *)
-
-(* Definition type_obs_val : T.type (obs_val) := *)
-(*   {| T.equal := obs_val_equiv ; *)
-(*      T.proper := obs_val_proper |}. *)
-
-(* Instance typeOk_obs_val: T.typeOk (type_obs_val). *)
-(* Proof. *)
-(*   constructor. *)
-(*   + intros. split; do 3 red; constructor. *)
-(*   + do 3 red. intros. red.  destruct x. apply forall2_eq_rel. *)
-(*     apply val_equiv_eq_rel. *)
-(*   + do 3 red. intros. red in H. red in H. revert H. *)
-(*     apply obs_val_equiv_eq_rel. *)
-(*   + do 3 red. intros. do 2 (red in H). do 2 (red in H0). *)
-(*     revert H0; revert H; apply obs_val_equiv_eq_rel. *)
-(* Qed. *)
-
-(* (* small-step based equality on state *)     *)
-(* Definition valid_term_state (s:state) := *)
-(*   match s with *)
-(*     | (rho, Eapp g varl) => *)
-(*       match M.get g rho with *)
-(*         | Some (Vobvs t) => *)
-(*           Forall (fun var => match M.get var rho with *)
-(*                             | Some val => observable_val val *)
-(*                             | _ => False *)
-(*                           end) varl *)
-(*         | _ => False *)
-(*       end *)
-(*     | _ => False *)
-(*   end *)
-
-
-(* Definition var_equiv: env -> env -> relation var := *)
-(*   fun rho1 rho2 => *)
-(*     fun var1 var2 => *)
-(*       match (M.get var1 rho1, M.get var2 rho2) with *)
-(*         |(Some v1, Some v2) => val_equiv v1 v2 *)
-(*         | _ => False *)
-(*       end. *)
-
-
-(* small-step based equality on state *)
-(* Definition valid_term_state (s:state) := *)
-(*   match s with *)
-(*     | (rho, Eapp g varl) => *)
-(*       match M.get g rho with *)
-(*         | Some (Vobvs t) => *)
-(*           Forall (fun var => match M.get var rho with *)
-(*                                | Some val => observable_val val *)
-(*                                | _ => False *)
-(*                              end) varl *)
-(*         | _ => False *)
-(*       end *)
-(*     | _ => False *)
-(*   end. *)
-
-(* Definition state_equiv: relation state := *)
-(*   fun s1 s2 => *)
-(*     exists sv1 sv2, *)
-(*       mstep s1 sv1 /\ mstep s2 sv2 /\ *)
-(*       valid_term_state sv2 /\ valid_term_state sv1 /\ *)
-(*       match (sv1, sv2) with *)
-(*         | ((rho1, Eapp g1 varl1) , (rho2, Eapp g2 varl2)) => *)
-(*           match (M.get g1 rho1, M.get g2 rho2) with  *)
-(*              | (Some v1, Some v2) => val_equiv v1 v2 *)
-(*              | _ => False *)
-(*            end *)
-(*           /\ Forall2 (var_equiv rho1 rho2) varl1 varl2 *)
-(*         | _ => False *)
-(*       end. *)
-
-
-(* Definition env_of_tenv :=  *)
-(*   fun rho:env => *)
-(*     fun Gamma:tenv => *)
-(*       forall var, *)
-(*         (exists ty, M.get var Gamma = Some ty <-> *)
-(*                     exists val, M.get var rho = Some val /\ type_of_val val ty). *)
-
-
-(* Lemma cant_step_terminal: *)
-(*   forall s s', *)
-(*     valid_term_state s -> ~ step s s'. *)
-(* Proof. *)
-(*   intros s s' H Hstep. unfold valid_term_state in H. *)
-(*   destruct s. destruct e0; try inversion H.  *)
-(*   destruct (M.get v e) eqn:Heq; try inversion H. destruct v0; try inv H;  *)
-(*   inv Hstep; congruence.  *)
-(* Qed. *)
-
-(* Theorem state_equiv_step_l: *)
-(*   forall s1 s2 s1', step s1 s1' -> (state_equiv s1 s2 <-> state_equiv s1' s2). *)
-(* Proof. *)
-(*   intros s1 s2 s1' H0. split; intro. *)
-(*   + unfold state_equiv in H. destruct H as [sv1 ?]. destruct H as [sv2 ?]. *)
-(*     do 4 ( destruct H as [?V H]). inversion V; subst.  assert (s3 = s1'). *)
-(*     eapply step_deterministic. apply H1. apply H0. subst. unfold state_equiv. *)
-(*     exists sv1. exists sv2. split. assumption. split. assumption. split. *)
-(*     assumption. split. assumption. assumption. *)
-(*     apply (cant_step_terminal _ _ V2) in H0. inversion H0. *)
-(*   + unfold state_equiv in H. destruct H as [sv1 ?]. destruct H as [sv2 ?]. *)
-(*     do 4 (destruct H as [?V H]). assert (mstep s1 sv1). eapply s_step. *)
-(*     apply H0. apply V. unfold state_equiv. exists sv1. exists sv2. split. *)
-(*     assumption. split. assumption. split. assumption. split. assumption. *)
-(*     assumption. *)
-(* Qed. *)
-
-(* Theorem state_equiv_step_r: *)
-(*   forall s1 s2 s2', step s2 s2' -> *)
-(*                     (state_equiv s1 s2  <-> state_equiv s1 s2'). *)
-(* Proof. *)
-(*   intros s1 s2 s2' H0. split; intro. *)
-(*   + unfold state_equiv in H. destruct H as [sv1 ?]. destruct H as [sv2 ?]. *)
-(*     do 4 (destruct H as [?V H]). inversion V0; subst. assert (s3 = s2'). *)
-(*     eapply step_deterministic. apply H1. assumption. subst. *)
-(*     unfold state_equiv. exists sv1. exists sv2. split. assumption. *)
-(*     split. assumption. split. assumption. split. assumption. assumption. *)
-(*     apply (cant_step_terminal _ _ V1) in H0. inversion H0. *)
-(*   + unfold state_equiv in H. destruct H as [sv1 ?]. destruct H as [sv2 ?]. *)
-(*     do 4 (destruct H as [?V H]). assert (mstep  s2 sv2). eapply s_step; eauto. *)
-(*     unfold state_equiv. exists sv1. exists sv2. split. assumption. split. *)
-(*     assumption. split. assumption. split. assumption. assumption. *)
-(* Qed. *)
-
-
-
-(* Theorem mstep_terminal_to_itself: *)
-(*   forall s s', *)
-(*     valid_term_state s ->  *)
-(*     mstep s s' -> *)
-(*     s = s'. *)
-(* Proof. *)
-(*   intros. inversion H0; subst. *)
-(*   assert False. eapply cant_step_terminal. apply H. apply H1. inversion H3. *)
-(*   reflexivity. *)
-(* Qed. *)
-
-
-(* Theorem forall2_varequiv_transitive: *)
-(*   forall e1 e2 e3 l1 l2 l3, *)
-(*     Forall2 (var_equiv e1 e2) l1 l2 -> *)
-(*     Forall2 (var_equiv e2 e3) l2 l3 -> *)
-(*     Forall2 (var_equiv e1 e3) l1 l3. *)
-(* Proof. *)
-(*   intros. generalize dependent l2. generalize dependent l3. *)
-(*   induction l1; intros. *)
-(*   inversion H; subst. inversion H0; subst. constructor. *)
-(*   inversion H; subst. inversion H0; subst. constructor. *)
-(*   red. red in H3. red in H4. clear H0. clear H7. clear H. *)
-(*   clear IHl1. destruct (M.get a e1); try inversion H3. *)
-(*   destruct (M.get y e2); try inversion H3. destruct (M.get y0 e3); *)
-(*     try inversion H4. reflexivity. *)
-(*   eapply IHl1. apply H5. apply H7. *)
-(* Qed. *)
-
-
-(* Definition state_proper := *)
-(*   fun st => exists sv, mstep st sv /\ valid_term_state sv. *)
-
-(* (* small step state equivalence *) *)
-(* Definition type_state : T.type (state) := *)
-(*   {| T.equal := state_equiv *)
-(*      ; T.proper := state_proper *)
-(*   |}. *)
-
-(* Instance typeOk_state : T.typeOk (type_state).  *)
-(* constructor.   *)
-(* intros. *)
-
-(* (* only proper *) *)
-(* inversion H. destruct H0. destruct H0. destruct H1. *)
-(* destruct H2. destruct H3. split; do 2 red. exists x0; split; assumption. *)
-(* exists x1; split; assumption. *)
-
-(* (* Reflective for proper state *)          *)
-(* red. intros. inversion H. destruct H0. red. red. red. exists x0. *)
-(* exists x0. split. assumption. split. assumption. split. assumption. *)
-(* split. assumption. unfold valid_term_state in H1. destruct x0. *)
-(* destruct e0; try inversion H1. destruct (M.get v e); try inversion H1. *)
-(* split. red. reflexivity. clear H0. induction l. constructor. constructor. *)
-(* red. destruct v0; try inversion H1; subst.  destruct (M.get a e). reflexivity. *)
-(* inversion H3. apply (IHl). destruct v0; try inversion H1. inversion H1; subst. *)
-(* assumption. *)
-
-(* (* symmetric *) *)
-(* red. intros. red. red. red. destruct H. destruct H. destruct H. destruct H0. *)
-(* destruct H1. destruct H2. exists x1. exists x0. split. assumption. split. *)
-(* assumption. split. assumption. split. assumption. destruct x0. destruct x1. *)
-(* destruct e0; try inversion H3. destruct e2; try inversion H3. split. clear H. *)
-(* clear H0. destruct (M.get v e); try inversion H3. *)
-(* destruct (M.get v0 e1); try inversion H4. reflexivity. inversion H. clear H. *)
-(* clear H0. clear H1. clear H2. clear H3. generalize dependent l0. induction l. *)
-(* intros. inversion H5. subst. constructor. intros. inversion H5. constructor. *)
-(* (* var_equiv is quasi-symmetric*) unfold var_equiv. unfold var_equiv in H1. *)
-(* destruct (M.get a e); try inversion H1. *)
-(* destruct (M.get y0 e1); try inversion H1. reflexivity.  apply IHl. assumption. *)
-
-(* (* Transitive *) *)
-(* red. intros. do 3 red. do 3 red in H.  do 3 red in H0. destruct H. destruct H. *)
-(* destruct H0. destruct H0. destruct H. destruct H1. destruct H2. destruct H3. *)
-(* destruct H0. destruct H5. destruct H6. destruct H7. *)
-(* assert (exists s', mstep x1 s' /\ mstep x2 s'). *)
-(* apply (church_rosser y x1 x2 H1 H0). *)
-(* destruct H9. destruct H9. *)
-(* apply (mstep_terminal_to_itself _ _ H7) in H10; subst. *)
-(* apply (mstep_terminal_to_itself _ _ H2) in H9; subst. exists x0. exists x3. *)
-(* repeat (split; try assumption). *)
-(* destruct x0. destruct e0; try inversion H4. destruct x3. destruct x4. *)
-(* destruct e3; try inversion H4. destruct e1; try inversion H8. *)
-(* destruct (M.get v e); try inversion H9. split. destruct (M.get v0 e2); try inversion H8. *)
-(* destruct (M.get v1 e0); try inversion H11. eapply transitivity. apply H9. *)
-(* apply H11. inversion H11. eapply forall2_varequiv_transitive. destruct H4. *)
-(* apply f. apply H12.  *)
-(* Qed. *)
-(* (* proofs of semantics preservation for P will look like  *)
- (*  forall rho, proper (rho, e) -> equal (rho, e) (rho, P e). *) *)
-
-
-(* (* small step exp equivalence *) *)
-(* Definition exp_equiv: relation exp := *)
-(*   fun e1 e2 => *)
-(*     (forall rho1, *)
-(*        state_proper(rho1, e1) -> state_equiv (rho1, e1) (rho1, e2)) /\ *)
-(*     (forall rho2, *)
-(*        state_proper (rho2, e2) -> state_equiv (rho2, e1) (rho2, e2)). *)
-
-(* Definition exp_proper := fun e:exp => True. *)
-
-(* Definition type_exp : T.type (exp) := *)
-(*   {| T.equal := exp_equiv  *)
-(*      ; T.proper := exp_proper *)
-(*   |}. *)
-
-(* Ltac tci := eauto with typeclass_instances. *)
-
-(* Instance typeOk_exp : T.typeOk (type_exp). *)
-(* Proof. *)
-(*   constructor. *)
-(*   intros. split; do 3 red; constructor. *)
-(*   (* PRefl *) *)
-(*   + red. intros. do 3 red. split; intros; apply typeOk_state; tci. *)
-
-(*   (* Symmetric *)     *)
-(*   + red. intros. do 3 red in H. destruct H. do 3 red. split; intros. *)
-(*   - apply H0 in H1. generalize H1. apply typeOk_state; tci. *)
-(*   - apply H in H1. generalize H1. apply typeOk_state; tci. *)
-(*     (* Transitive *) *)
-(*     + do 3 red. intros. do 3 red in H. destruct H. do 3 red in H0. *)
-(*       destruct H0. red. split; intros. *)
-(*   - apply H in H3. assert (H4 := H3). apply typeOk_state in H3. destruct H3. *)
-(*     apply H0 in H5. generalize H5. generalize H4. apply typeOk_state; tci. *)
-(*   - apply H2 in H3. assert (H4 := H3). apply typeOk_state in H3; destruct H3. *)
-(*     apply H1 in H3. generalize H4. generalize H3. apply typeOk_state; tci. *)
-(* Qed. *)
-
-(* (* fun equivalence *) *)
-(* Definition fun_equiv: forall e1 e2, exp_equiv e1 e2 -> relation fundefs := *)
-(*   fun e1 e2 => *)
-(*     fun equiv_e1e2 => *)
-(*       fun fds1 fds2 => *)
-(*         (forall rho1, *)
-(*            state_proper (def_funs fds1 fds1 rho1 rho1, e1) -> *)
-(*            state_equiv (def_funs fds1 fds1 rho1 rho1, e1) (def_funs fds2 fds2 rho1 rho1, e2)) /\ *)
-(*         (forall rho2, *)
-(*            state_proper (def_funs fds2 fds2 rho2 rho2, e2) -> *)
-(*            state_equiv (def_funs fds1 fds1 rho2 rho2, e1) (def_funs fds2 fds2 rho2 rho2, e2)). *)
-
-(* Definition fun_proper := fun f:fundefs => True. *)
-
-(* Definition etype_fun :  forall e1 e2, exp_equiv e1 e2 -> T.type fundefs  := *)
-(*   fun e1 e2 => fun equiv_e1e2 =>  *)
-(*                  {| T.equal := fun_equiv e1 e2 equiv_e1e2 *)
-(*                     ; T.proper := fun_proper *)
-(*                  |}. *)
-
-(* Instance etypeOk_fun : forall e1 e2, forall equiv_e1e2: exp_equiv e1 e2, T.typeOk (etype_fun e1 e2 equiv_e1e2). *)
-(* intros. constructor. *)
-(* (* only *) *)
-(* + intros. split; do 3 red; constructor. *)
-(* (* Prefl *) *)
-(* + red. intros. do 3 red. split; intros. *)
-(* - red in equiv_e1e2. destruct equiv_e1e2. *)
-(*   apply s in H0. assumption.   *)
-(* - red in equiv_e1e2. destruct equiv_e1e2. apply s0 in H0. assumption.  *)
-(*   (* symmetric *) *)
-(*   + red. intros. do 3 red in H. do 3 red. destruct H. red in equiv_e1e2. *)
-(*     destruct equiv_e1e2. split; intros. *)
-(* - assert (H4 := H3). apply H1 in H4.  assert (H5 := H4). *)
-(*   apply typeOk_state in H4; destruct H4.  apply H0 in H6. *)
-(*   assert (H7 := H6). apply typeOk_state in H6; destruct H6. apply H1 in H6. *)
-(*   eapply (@T.equiv_trans _ type_state typeOk_state). *)
-(*   eapply (@T.equiv_trans _ type_state typeOk_state). *)
-(*   apply H5. apply (T.equiv_sym type_state _ _) in H7. apply H7. assumption. *)
-(* - apply H2 in H3. assert (H4 := H3). apply typeOk_state in H4; destruct H4. *)
-(*   apply H in H4. assert (H6 := H4). apply typeOk_state in H4; destruct H4. *)
-(*   apply H2 in H7. eapply (@T.equiv_trans _ type_state typeOk_state). *)
-(*   eapply (@T.equiv_trans _ type_state typeOk_state). apply H7. *)
-(*   apply (T.equiv_sym type_state _ _) in H6. apply H6. assumption.     *)
-(*   (* transitive *) *)
-(*   + red. intros. do 3 red in H. do 3 red in H0. do 3 red. *)
-(*     destruct H. destruct H0. red in equiv_e1e2. destruct equiv_e1e2. *)
-(*     split; intros. *)
-(* - apply H in H5. assert (Hfin1 := H5). apply typeOk_state in H5; destruct H5. *)
-(*   apply H4 in H6. assert (Hfin2 := H6). apply typeOk_state in H6; destruct H6. *)
-(*   apply H0 in H6. Print T. About T.equiv_sym. *)
-(*   eapply (T.equiv_sym type_state _ _) in Hfin2. About T.equiv_trans. *)
-(*   eapply (@T.equiv_trans _ type_state typeOk_state). *)
-(*   eapply (@T.equiv_trans _ type_state typeOk_state). apply Hfin1. *)
-(*   apply Hfin2. apply H6. *)
-(* - apply H2 in H5. assert (Hfin1 := H5). apply typeOk_state in H5; destruct H5. *)
-(*   apply H3 in H5. assert (Hfin2 := H5). apply typeOk_state in H5; destruct H5. *)
-(*   apply H1 in H7.  eapply (@T.equiv_trans _ type_state typeOk_state). *)
-(*   eapply (@T.equiv_trans _ type_state typeOk_state). apply H7. *)
-(*   apply (T.equiv_sym type_state _ _) in Hfin2. apply Hfin2. assumption. *)
-(* Qed. *)
-
-(* (* big step exp equivalence *) *)
-(* Definition  bs_exp_proper := *)
-(*   fun _:exp => True (* fun e:exp => exists rho v, bstep_e rho e v. *). *)
-
-
-
-(* Definition bs_exp_equiv : relation exp := *)
-(*   fun e1 e2 => *)
-(*     (forall rho v, *)
-(*        bstep_e rho e1 v -> exists v', bstep_e rho e2 v' /\ obs_val_equiv v v') /\ *)
-(*     (forall rho v, *)
-(*        bstep_e rho e2 v -> exists v', bstep_e rho e1 v' /\ obs_val_equiv v v'). *)
-
-(* Definition type_bs_exp : T.type (exp) := *)
-(*   {| T.equal := bs_exp_equiv *)
-(*      ;T.proper := bs_exp_proper |}. *)
-
-(* Instance typeOk_bs_exp : T.typeOk (type_bs_exp). *)
-(* Proof. *)
-(*   constructor. *)
-(*   intros. split; do 3 red; constructor. *)
-(*   + do 3 red. intros. unfold bs_exp_equiv. *)
-(*     split; intros. exists v. split. assumption. *)
-(*     apply obs_val_equiv_eq_rel. exists v. split. assumption. *)
-(*     apply typeOk_obs_val. auto. *)
-(*   + red. intros. do 3 red in H.  destruct H. do 3 red. split; intros. *)
-(*     apply H0 in H1. destruct H1. destruct H1. exists x0. split. assumption. *)
-(*     assumption. apply H in H1. destruct H1. destruct H1. *)
-(*     exists x0. split; assumption. *)
-(*   + do 3 red. intros. do 3 red in H. destruct H. do 3 red in H0. *)
-(*     destruct H0. red. split. intros. apply H in H3. destruct H3. destruct H3. *)
-(*     apply H0 in H3. destruct H3. exists x1. destruct H3. split. assumption. *)
-(*     revert H5. revert H4. apply typeOk_obs_val. *)
-(*     intros. apply H2 in H3. destruct H3. destruct H3. apply H1 in H3. *)
-(*     destruct H3. exists x1. destruct H3. split. assumption. revert H5. *)
-(*     revert H4. apply typeOk_obs_val. *)
-(* Qed. *)

@@ -1,19 +1,19 @@
 (** Uncurrying written as a guarded rewrite rule *)
 
-Require Import Coq.Classes.Morphisms.
-Require Import Coq.NArith.BinNat Coq.PArith.BinPos Coq.Sets.Ensembles Lia.
+From Stdlib Require Import Classes.Morphisms.
+From Stdlib Require Import NArith.BinNat PArith.BinPos Sets.Ensembles Lia.
 Require Import Common.
 Require Import LambdaANF.Prototype.
 Require Import LambdaANF.proto_util.
-Require Import LambdaANF.cps LambdaANF.cps_proto_univ LambdaANF.cps_proto.
+Require Import LambdaANF.term LambdaANF.cps_proto_univ LambdaANF.cps_proto.
 Require Import identifiers.  (* for max_var, occurs_in_exp, .. *)
-Require Import LambdaANF.Ensembles_util LambdaANF.List_util LambdaANF.cps_util LambdaANF.state.
+Require Import LambdaANF.Ensembles_util LambdaANF.List_util LambdaANF.term_util LambdaANF.state.
 
-Require Import Coq.Lists.List.
+From Stdlib Require Import Lists.List.
 Import ListNotations.
 
 (* Set Universe Polymorphism. *)
-Unset MetaCoq Strict Unquote Universe Mode.
+Unset MetaRocq Strict Unquote Universe Mode.
 
 (** * Uncurrying as a guarded rewrite rule *)
 
@@ -39,17 +39,17 @@ Definition set_names_lst olds news suff cdata :=
 (* true if in cps mode *)
 Definition I_R : forall {A}, frames_t A exp_univ_exp -> bool -> Prop := (I_R_plain (R:=bool)).
 
-(* pair of 
-   1 - max number of arguments 
+(* pair of
+   1 - max number of arguments
    2 - encoding of inlining decision for beta-contraction phase *)
-Definition St : Set := (nat * (cps.M.tree nat))%type.
+Definition St : Set := (nat * (term.M.tree nat))%type.
 (* 0 -> Do not inline, 1 -> uncurried function, 2 -> continuation of uncurried function *)
 
 (* Maps (arity+1) to the right fun_tag *)
-Definition arity_map : Set := cps.M.tree fun_tag.
-Definition local_map : Set := cps.M.tree bool.
- 
-(* The state for this includes 
+Definition arity_map : Set := term.M.tree fun_tag.
+Definition local_map : Set := term.M.tree bool.
+
+(* The state for this includes
    1 - a boolean for tracking whether or not a reduction happens
    2 - Map recording the (new) fun_tag associated to each arity
    3 - local map from var to if function has already been uncurried
@@ -211,7 +211,7 @@ Proof.
     specialize (success lhs fds' rhs ms').
     eapply success; [|reflexivity|reflexivity| |];
     try lazymatch goal with
-    | |- «_» => unerase; destruct Hnext_x as [? Hnext_x]; 
+    | |- «_» => unerase; destruct Hnext_x as [? Hnext_x];
       (edestruct (@gensyms_spec var) as [Hgv_copies [Hfresh_gv Hgv_len]]; try exact Hxgv1; [eassumption|]);
       (edestruct (@gensyms_spec var) as [Hfv_copies [Hfresh_fv Hfv_len]]; try exact Hxfv1; [eassumption|]);
       repeat match goal with |- _ /\ _ => split end;
@@ -274,7 +274,7 @@ Proof.
     (* Prove that all the above code actually satisfies the side condition *)
     eapply success; [|reflexivity|reflexivity| |];
     try lazymatch goal with
-    | |- «_» => unerase; destruct Hnext_x as [? Hnext_x]; 
+    | |- «_» => unerase; destruct Hnext_x as [? Hnext_x];
       (edestruct (@gensyms_spec var) as [Hgv_copies [Hfresh_gv Hgv_len]]; try exact Hxgv1; [eassumption|]);
       (edestruct (@gensyms_spec var) as [Hfv_copies [Hfresh_fv Hfv_len]]; try exact Hxfv1; [eassumption|]);
       repeat match goal with |- _ /\ _ => split end;
@@ -307,6 +307,44 @@ Proof.
   - cbn in *; subst fds'0. decompose [and] H; subst fds'; cbn; intros _.
     assert (size (gv ++ fv) < size gv + size fv) by now apply size_app.
     lia.
+  - cbn in *.
+    change ((fix size_exp (e1 : exp) : nat :=
+               match e1 with
+               | Ecase _ ces => S (S (size_list (size_prod size size_exp) ces))
+               | Eproj _ _ _ _ e2 => S (S (S (S (S (size_exp e2)))))
+               | Eletapp _ _ _ ys e2 => S (S (S (S (size ys + size_exp e2))))
+               | Efun fds e2 => S (size_fundefs fds + size_exp e2)
+               | Eapp _ _ xs => S (S (S (size xs)))
+               | Eprim_val _ _ e2 => S (S (S (size_exp e2)))
+               | Econstr _ _ ys e2 | Eprim _ _ ys e2 => S (S (S (size ys + size_exp e2)))
+               | Ehalt x => S (size x)
+               end
+               with size_fundefs (fds : fundefs) : nat :=
+                 match fds with
+                 | Fcons _ _ xs e1 fds0 => S (S (S (size xs + size_exp e1 + size_fundefs fds0)))
+                 | Fnil => 1
+                 end
+                   for
+                   size_exp) e0) with (size e0). cbn. lia.
+  - cbn in *.
+    change ((fix size_exp (e1 : exp) : nat :=
+               match e1 with
+               | Ecase _ ces => S (S (size_list (size_prod size size_exp) ces))
+               | Eproj _ _ _ _ e2 => S (S (S (S (S (size_exp e2)))))
+               | Eletapp _ _ _ ys e2 => S (S (S (S (size ys + size_exp e2))))
+               | Efun fds e2 => S (size_fundefs fds + size_exp e2)
+               | Eapp _ _ xs => S (S (S (size xs)))
+               | Eprim_val _ _ e2 => S (S (S (size_exp e2)))
+               | Econstr _ _ ys e2 | Eprim _ _ ys e2 => S (S (S (size ys + size_exp e2)))
+               | Ehalt x => S (size x)
+               end
+               with size_fundefs (fds : fundefs) : nat :=
+                 match fds with
+                 | Fcons _ _ xs e1 fds0 => S (S (S (size xs + size_exp e1 + size_fundefs fds0)))
+                 | Fnil => 1
+                 end
+                   for
+                   size_fundefs) f) with (size f). cbn. lia.
 Defined.
 
 Set Extraction Flag 2031. (* default + linear let + linear beta *)

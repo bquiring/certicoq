@@ -1,9 +1,9 @@
-Require Import Coq.Strings.String Coq.Classes.Morphisms Coq.Relations.Relations.
-Require Import Coq.PArith.BinPos Coq.Sets.Ensembles Lia.
-Require Import LambdaANF.identifiers LambdaANF.Prototype LambdaANF.cps_proto_univ LambdaANF.cps_proto LambdaANF.cps LambdaANF.cps_util.
+From Stdlib Require Import Strings.String Classes.Morphisms Relations.Relations.
+From Stdlib Require Import PArith.BinPos Sets.Ensembles Lia.
+Require Import LambdaANF.identifiers LambdaANF.Prototype LambdaANF.cps_proto_univ LambdaANF.cps_proto LambdaANF.term LambdaANF.term_util.
 Require Import LambdaANF.Ensembles_util LambdaANF.rename LambdaANF.shrink_cps LambdaANF.map_util.
 
-Require Import Coq.Lists.List.
+From Stdlib Require Import Lists.List.
 Import ListNotations.
 
 Definition fresher_than (x : var) (S : Ensemble var) : Prop :=
@@ -21,7 +21,7 @@ Proof. intros Hxy Hfresh z Hz. assert (x > z)%positive by now apply Hfresh. lia.
 Lemma fresher_than_Union x S1 S2 : fresher_than x S1 -> fresher_than x S2 -> fresher_than x (S1 :|: S2).
 Proof. intros HS1 HS2 y Hy; destruct Hy as [y Hy|y Hy]; auto. Qed.
 
-Instance Proper_fresher_than_r : Proper (Logic.eq ==> Same_set _ ==> iff) fresher_than.
+#[global] Instance Proper_fresher_than_r : Proper (Logic.eq ==> Same_set _ ==> iff) fresher_than.
 Proof.
   unfold Proper, "==>", fresher_than.
   intros x y Hxy x0 y0 Hxy0; subst; split; intros Hforall dummy; now (rewrite <- Hxy0 || rewrite Hxy0).
@@ -31,7 +31,7 @@ Definition fresh_copies (S : Ensemble var) (l : list var) : Prop := Disjoint _ S
 
 Definition gensym (x : var) : var * var := (x + 1, x)%positive.
 
-Lemma gensym_spec x S x' y : 
+Lemma gensym_spec x S x' y :
   fresher_than x S ->
   (x', y) = gensym x ->
   ~ y \in S /\ fresher_than x' (y |: S).
@@ -57,11 +57,12 @@ Lemma gensyms_len' {A} : forall x (xs : list A) x' xs', (x', xs') = gensyms x xs
 Proof.
   intros x xs; revert x; induction xs as [|x xs IHxs]; intros x0 x' xs' Hgen; [simpl in Hgen; now inv Hgen|].
   unfold gensyms in Hgen; fold @gensyms in Hgen.
-  destruct (gensyms (x0 + 1)%positive xs) as [x'' xs''] eqn:Hx0; inv Hgen; now simpl.
+  destruct (gensyms (x0 + 1)%positive xs) as [x'' xs''] eqn:Hx0. inv Hgen;  simpl. f_equal.
+  eapply IHxs. now symmetry.
 Qed.
 
 Lemma gensyms_increasing' {A} :
-  forall x (xs : list A) x' xs', (x', xs') = gensyms x xs -> 
+  forall x (xs : list A) x' xs', (x', xs') = gensyms x xs ->
   forall y, List.In y xs' -> (y >= x)%positive.
 Proof.
   intros x xs; revert x; induction xs as [|x xs IHxs]; intros x0 x' xs' Hgen y Hy;
@@ -74,7 +75,7 @@ Proof.
   specialize (IHxs x'' xs'' eq_refl H); lia.
 Qed.
 
-Local Ltac mk_corollary parent := 
+Local Ltac mk_corollary parent :=
   intros x xs x' xs';
   pose (Hparent := parent _ x xs); clearbody Hparent; intros H;
   destruct (gensyms x xs); now inversion H.
@@ -175,7 +176,7 @@ Proof.
   lia.
 Qed.
 
-Lemma gensyms_spec {A} x S (xs : list A) x' xs' : 
+Lemma gensyms_spec {A} x S (xs : list A) x' xs' :
   fresher_than x S ->
   (x', xs') = gensyms x xs ->
   fresh_copies S xs' /\ fresher_than x' (S :|: FromList xs') /\ length xs' = length xs.
@@ -198,7 +199,7 @@ Qed.
 
 Section RunRewriter.
 
-Context 
+Context
   {Root : exp_univ} {fueled : bool} {metric : Metric Root fueled} {Rstep : relation (univD Root)}
   {D : Set} {I_D : forall A, univD A -> D -> Prop} `{@Delayed _ Frame_exp D I_D}
   {R : Set} {I_R : forall A, frames_t A Root -> R -> Prop}
@@ -241,9 +242,9 @@ Definition I_S_fresh {A} (C : exp_c A exp_univ_exp) (e : univD A) (x : var) : Pr
   fresher_than x (used_vars (C ⟦ e ⟧)).
 
 (* We don't have to do anything to preserve a fresh variable as we move around *)
-Instance Preserves_S_dn_S_fresh : Preserves_S_dn (@I_S_fresh).
+#[global] Instance Preserves_S_dn_S_fresh : Preserves_S_dn (@I_S_fresh).
 Proof. unfold Preserves_S_dn; intros A B C C_ok f x s; exact s. Defined.
-Instance Preserves_S_up_S_fresh : Preserves_S_up (@I_S_fresh).
+#[global] Instance Preserves_S_up_S_fresh : Preserves_S_up (@I_S_fresh).
 Proof. unfold Preserves_S_up; intros A B C C_ok f x s; exact s. Defined.
 Extraction Inline Preserves_S_dn_S_fresh Preserves_S_up_S_fresh.
 
@@ -259,34 +260,34 @@ Defined.
 (* Some passes assume unique bindings *)
 Definition I_S_uniq {A} (C : exp_c A exp_univ_exp) (e : univD A) (_ : unit) : Prop :=
   unique_bindings (C ⟦ e ⟧).
-Instance Preserves_S_dn_S_uniq : Preserves_S_dn (@I_S_uniq).
+#[global] Instance Preserves_S_dn_S_uniq : Preserves_S_dn (@I_S_uniq).
 Proof. unfold Preserves_S_dn; intros A B C C_ok f x s; exact s. Defined.
-Instance Preserves_S_up_S_uniq : Preserves_S_up (@I_S_uniq).
+#[global] Instance Preserves_S_up_S_uniq : Preserves_S_up (@I_S_uniq).
 Proof. unfold Preserves_S_up; intros A B C C_ok f x s; exact s. Defined.
 Extraction Inline Preserves_S_dn_S_uniq Preserves_S_up_S_uniq.
 
 (* Additional facts about variables *)
 
-Fixpoint bound_var_ces (ces : list (cps.ctor_tag * cps.exp)) :=
+Fixpoint bound_var_ces (ces : list (term.ctor_tag * term.exp)) :=
   match ces with
   | [] => Empty_set _
   | (c, e) :: ces => bound_var e :|: bound_var_ces ces
   end.
 
-Lemma bound_var_Ecase x ces : bound_var (cps.Ecase x ces) <--> bound_var_ces ces.
+Lemma bound_var_Ecase x ces : bound_var (term.Ecase x ces) <--> bound_var_ces ces.
 Proof.
   induction ces as [|[c e] ces IHces].
   - rewrite bound_var_Ecase_nil; now cbn.
   - rewrite bound_var_Ecase_cons; cbn; rewrite IHces; eauto with Ensembles_DB.
 Qed.
 
-Fixpoint used_vars_ces (ces : list (cps.ctor_tag * cps.exp)) :=
+Fixpoint used_vars_ces (ces : list (term.ctor_tag * term.exp)) :=
   match ces with
   | [] => Empty_set _
   | (c, e) :: ces => used_vars e :|: used_vars_ces ces
   end.
 
-Lemma used_vars_Ecase x ces : used_vars (cps.Ecase x ces) <--> x |: used_vars_ces ces.
+Lemma used_vars_Ecase x ces : used_vars (term.Ecase x ces) <--> x |: used_vars_ces ces.
 Proof.
   induction ces as [|[c e] ces IHces].
   - rewrite used_vars_Ecase_nil; cbn; now normalize_sets.
@@ -306,10 +307,10 @@ Definition image'' σ : Ensemble var := fun y => exists x, M.get x σ = Some y.
 Lemma apply_r_vars σ x : [set apply_r σ x] \subset x |: image'' σ.
 Proof.
   unfold apply_r.
-  destruct (cps.M.get x σ) as [y|] eqn:Hget; [|eauto with Ensembles_DB].
+  destruct (term.M.get x σ) as [y|] eqn:Hget; [|eauto with Ensembles_DB].
   intros arb Harb; inv Harb; right; unfold image'', Ensembles.In; now exists x.
 Qed.
-  
+
 Lemma apply_r_list_vars σ xs :
   FromList (apply_r_list σ xs) \subset FromList xs :|: image'' σ.
 Proof.

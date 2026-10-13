@@ -1,15 +1,16 @@
 Require Import Common.Pipeline_utils.
 
-Require Import Coq.ZArith.ZArith
-               Coq.Program.Basics
-               Coq.Strings.String
-               Coq.Lists.List List_util.
+From Stdlib Require Import ZArith.ZArith
+               Program.Basics
+               Strings.String
+               Lists.List.
+Require Import List_util.
 
 Require Import ExtLib.Structures.Monads
                ExtLib.Data.Monads.OptionMonad.
 
-From MetaCoq.Common Require Import BasicAst.
-Require MetaCoq.Template.All.
+From MetaRocq.Common Require Import BasicAst.
+Require MetaRocq.Template.All.
 
 Require Import compcert.common.AST
                compcert.common.Errors
@@ -20,14 +21,18 @@ Require Import compcert.common.AST
                compcert.common.Values
                compcert.export.Clightdefs.
 
-Require Import LambdaANF.cps
+Require Import LambdaANF.term
                LambdaANF.identifiers
                LambdaANF.cps_show
                LambdaANF_to_Clight
                compM
                glue_utils.
 
-From MetaCoq.Utils Require Import bytestring MCString.
+From MetaRocq.Utils Require Import bytestring MRString.
+
+Notation Tcons := cons.
+Notation Tnil := nil.
+Notation typelist := (list type).
 
 Import MonadNotation ListNotations.
 Open Scope monad_scope.
@@ -203,7 +208,7 @@ Section GState.
     ret (M.get k ienv).
 
   (* A hacky way to get the [ind_L1_tag] of a type from its name.
-     This is necessary because of a shortcoming of Template Coq.
+     This is necessary because of a shortcoming of Template Stdlib.
      (mutually recursive type names aren't fully qualified) *)
   Definition get_tag_from_type_name (s : kername) : glueM (option ind_L1_tag) :=
     let find (prev : option ind_L1_tag)
@@ -217,7 +222,7 @@ Section GState.
     ret (M.fold find ienv None).
 
   (* A hacky way to get the [ind_L1_tag] of a type from its [inductive] value.
-     This is necessary because of a shortcoming of Template Coq. *)
+     This is necessary because of a shortcoming of Template Stdlib. *)
   Definition get_tag_from_inductive (i : inductive) : glueM (option ind_L1_tag) :=
     let find (prev : option ind_L1_tag)
              (tag : ind_L1_tag)
@@ -269,7 +274,7 @@ Section Externs.
     _v <- gensym "v" ;;
     ret (gname,
          Gfun (Internal
-                 {| fn_return := tuint
+                 {| fn_return := uval
                   ; fn_callconv := cc_default
                   ; fn_params := (_v, val) :: nil
                   ; fn_vars := nil
@@ -284,7 +289,7 @@ Section Externs.
     _v <- gensym "v" ;;
     ret (gname,
          Gfun (Internal
-                 {| fn_return := tuint
+                 {| fn_return := uval
                   ; fn_callconv := cc_default
                   ; fn_params := (_v, val) :: nil
                   ; fn_vars := nil
@@ -390,7 +395,7 @@ Section Externs.
       | ANF =>
         Composite _closure Struct
          (Member_plain _func
-                      (tptr (Tfunction (Tcons (Tstruct _thread_info noattr)
+                      (tptr (Tfunction (Tcons (tptr (Tstruct _thread_info noattr))
                                        (Tcons val (Tcons val Tnil))) val cc_default)) ::
           Member_plain _env val :: nil) noattr ::
         (* Composite _stack_frame Struct *)
@@ -408,7 +413,7 @@ Section Externs.
       | CPS =>
         Composite _closure Struct
          (Member_plain _func
-                      (tptr (Tfunction (Tcons (Tstruct _thread_info noattr)
+                      (tptr (Tfunction (Tcons (tptr (Tstruct _thread_info noattr))
                                        (Tcons val (Tcons val Tnil))) Tvoid cc_default)) ::
           Member_plain _env val :: nil) noattr ::
         (* Composite _thread_info Struct *)
@@ -422,7 +427,7 @@ Section Externs.
         {| printf_info :=
               (_printf, Tfunction (Tcons (tptr tschar) Tnil) tint cc_default)
          ; is_ptr_info :=
-              (_is_ptr, Tfunction (Tcons val Tnil) tbool cc_default)
+              (_is_ptr, Tfunction (Tcons val Tnil) tint cc_default)
          ; literals_info := literals
          ; get_unboxed_ordinal_info :=
               (_guo, Tfunction (Tcons val Tnil) tuint cc_default)
@@ -444,12 +449,12 @@ Section Externs.
                                        (Tret AST.Tint)
                                        cc_default))
                         (Tcons (tptr tschar) Tnil) tint cc_default)) ::
+       *)
        (_is_ptr,
          Gfun (External (EF_external "is_ptr"
-                          (mksignature (val_typ :: nil) AST.Tvoid cc_default))
+                          (mksignature (val_typ :: nil) Xvoid cc_default))
                         (Tcons val Tnil)
-                        (Tint IBool Unsigned noattr) cc_default)) ::
-       *)
+                        tint cc_default)) ::
        (_guo, def_guo) ::
        (_gbo, def_gbo) ::
        (_get_args, def_get_args) ::
@@ -527,13 +532,13 @@ Section L1Types.
         match e with
           | Ast.tProd _ _ e' => check_last e'
           | Ast.tSort u =>
-              MetaCoq.Common.Universes.Universe.is_prop u
+              MetaRocq.Common.Universes.Sort.is_prop u
           | _ => false
         end
     in check_last (Ast.Env.ind_type (ty_body info)).
 
   (* Takes in a list of types and removes the ones that are of sort [Prop].
-     [Set] and [Type] are fine. CertiCoq erases [Prop]s early on,
+     [Set] and [Type] are fine. CertiRocq erases [Prop]s early on,
      so no glue code is needed for those types. *)
   Fixpoint filter_prop_types
            (l : list (ind_L1_tag * ty_info)) : glueM (list (ind_L1_tag * ty_info)) :=
@@ -961,7 +966,7 @@ Section CtorEnumTag.
     | nil => LSnil
     | (ordinal, tag) :: pairs' =>
       LScons (Some (Z.of_nat ordinal))
-             (Sreturn (Some (Econst_int (Int.repr (Z.of_nat tag)) tuint)))
+             (Sreturn (Some (Econst_int (Int.repr (Z.of_nat tag)) uval)))
              (matches_to_LS pairs')
     end.
 
@@ -980,30 +985,30 @@ Section CtorEnumTag.
         let (boxed, unboxed) := match_ordinals_with_tag (Ast.Env.ind_ctors one) 0 0 0 in
         let (vars, body) := match boxed, unboxed with
           | nil, nil => (* if there are no constructors, just return 0 *)
-             (nil, Sreturn (Some (Econst_int (Int.repr 0) tuint)))
+             (nil, Sreturn (Some (Econst_int (Int.repr 0) uval)))
           | nil, _ => (* if all ctors are unboxed, then just call get_unboxed_ordinal *)
-             ((_t, tuint) :: nil,
+             ((_t, uval) :: nil,
               Scall (Some _t) (Evar _guo ty_guo) (Etempvar _v val :: nil) ;;;
-              Sreturn (Some (Etempvar _t tuint)))
+              Sreturn (Some (Etempvar _t uval)))
           | _, nil => (* if all ctors are unboxed, then just call get_boxed_ordinal *)
-             ((_t, tuint) :: nil,
+             ((_t, uval) :: nil,
               Scall (Some _t) (Evar _gbo ty_gbo) (Etempvar _v val :: nil) ;;;
-              Sreturn (Some (Etempvar _t tuint)))
+              Sreturn (Some (Etempvar _t uval)))
           | _, _ => (* if there are boxed and unboxed constructors, then if and switch *)
             let body :=
               Scall (Some _b) (Evar _is_ptr ty_is_ptr) (Etempvar _v val :: nil) ;;;
               Sifthenelse
                 (Etempvar _b tbool)
                 (Scall (Some _t) (Evar _gbo ty_gbo) (Etempvar _v val :: nil) ;;;
-                Sswitch (Etempvar _t tuint) (matches_to_LS boxed))
+                Sswitch (Etempvar _t uval) (matches_to_LS boxed))
                 (Scall (Some _t) (Evar _guo ty_guo) (Etempvar _v val :: nil) ;;;
-                Sswitch (Etempvar _t tuint) (matches_to_LS unboxed))
-            in ((_b, tbool) :: (_t, tuint) :: nil, body)
+                Sswitch (Etempvar _t uval) (matches_to_LS unboxed))
+            in ((_b, tbool) :: (_t, uval) :: nil, body)
           end in
         gname <- gensym ("get_" ++ sanitize_qualified kn ++ "_tag") ;;
         let f := (gname,
                   Gfun (Internal
-                          {| fn_return := tuint
+                         {| fn_return := uval
                           ; fn_callconv := cc_default
                           ; fn_params := (_v, val) :: nil
                           ; fn_vars := nil
@@ -1024,7 +1029,7 @@ Section CConstructors.
     match n with
     | O => ret nil
     | S n' =>
-        new_id <- gensym ("arg" ++ MCString.string_of_nat n')%bs ;;
+        new_id <- gensym ("arg" ++ MRString.string_of_nat n')%bs ;;
         rest_id <- make_arg_list' n' ;;
         ret ((new_id, val) :: rest_id)
     end.
@@ -1050,7 +1055,7 @@ Section CConstructors.
     | (* Unboxed *) {| ctor_name := cname ; ctor_arity := O ; ctor_ordinal := ord |} :: ctors =>
         constr_fun_id <- gensym (make_name cname) ;;
         let body :=
-          Sreturn (Some (Econst_int (Int.repr (Z.add (Z.shiftl (Z.of_nat ord) 1) 1)) val)) in
+          Sreturn (Some (Ecast (Econst_int (Int.repr (Z.add (Z.shiftl (Z.of_nat ord) 1) 1)) val) val)) in
         let f := (constr_fun_id,
                   Gfun (Internal
                           {| fn_return := val

@@ -1,6 +1,6 @@
 (* General purpose tactics *)
 
-Require Import ssrbool Coq.Arith.Arith. 
+From Stdlib Require Import ssrbool Arith.Arith.
 
 Ltac inv H := inversion H; clear H; subst.
 
@@ -19,7 +19,7 @@ Ltac subst_exp :=
 Ltac tci := eauto with typeclass_instances.
 
 Global Remove Hints ssrbool.not_false_is_true : core.
-        
+
 Ltac sets := eauto with Ensembles_DB functions_BD.
 
 Ltac xsets := eauto 20 with Ensembles_DB functions_BD.
@@ -34,11 +34,11 @@ Ltac destructAll :=
 Ltac pi0 :=
   repeat match goal with
          | [ H: _ + _ = 0 |- _ ] =>
-           apply plus_is_O in H; destruct H; subst
+           apply Nat.eq_add_0 in H; destruct H; subst
          | [ H: 0 = _ + _ |- _ ] =>
            symmetry in H; pi0
-         (* | [ H: (if cps_util.var_dec ?X ?Y then _ else _) = 0 |- _] => *)
-         (*   destruct (cps_util.var_dec X Y); try inversion H; pi0 *)
+         (* | [ H: (if term_util.var_dec ?X ?Y then _ else _) = 0 |- _] => *)
+         (*   destruct (term_util.var_dec X Y); try inversion H; pi0 *)
          | [ H: ?X <> ?X |- _] =>
            exfalso; apply H; auto
          end.

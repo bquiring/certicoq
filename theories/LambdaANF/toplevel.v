@@ -1,11 +1,12 @@
-Require Import ZArith.
+From Stdlib Require Import ZArith.
 Require Import Common.
-From CertiCoq Require Import
-     LambdaANF.cps LambdaANF.cps_util LambdaANF.state LambdaANF.eval LambdaANF.shrink_cps LambdaANF.LambdaBoxLocal_to_LambdaANF
+From CertiRocq Require Import
+     LambdaANF.term LambdaANF.term_util LambdaANF.state LambdaANF.eval LambdaANF.shrink_cps
      LambdaANF.inline LambdaANF.uncurry_proto LambdaANF.closure_conversion
      LambdaANF.closure_conversion LambdaANF.hoisting LambdaANF.dead_param_elim LambdaANF.lambda_lifting.
-From CertiCoq Require Import LambdaBoxLocal.toplevel.
-(* From CertiCoq.Codegen Require Import LambdaANF_to_Clight. *)
+From CertiRocq.LambdaBox_to_LambdaANF Require Import common.
+From CertiRocq.LambdaBox_to_LambdaANF Require anf cps.
+(* From CertiRocq.Codegen Require Import LambdaANF_to_Clight. *)
 
 Require Import Common.Common Common.compM Common.Pipeline_utils.
 Require Import ExtLib.Structures.Monad.
@@ -14,16 +15,17 @@ Import Monads.
 
 Import MonadNotation.
 
-Definition prim_env := M.t (kername * string (* C definition *) * bool (* tinfo *) * nat (* arity *)). 
+Definition prim_env := M.t primitive.
 
 Definition LambdaANFenv : Type := eval.prims * prim_env * ctor_env * ctor_tag * ind_tag * name_env * fun_env * eval.env.
 
-Definition LambdaANFterm : Type := cps.exp.
-Definition LambdaANFval : Type := cps.val.
+Definition LambdaANFterm : Type := term.exp.
+Definition LambdaANFval : Type := term.val.
 Definition LambdaANF_FullTerm : Type := LambdaANFenv * LambdaANFterm.
+Definition LambdaBoxEAstTerm : Type := EAst.global_declarations * EAst.term.
 
 Section IDENT.
-  
+
   Context (next_var : positive).
 
   Instance LambdaANF_Lang : Lang LambdaANF_FullTerm :=
@@ -50,29 +52,47 @@ Section IDENT.
   Definition kon_fun_tag := 2%positive.
 
 
-  Definition make_prim_env (prims : list (kername * string * bool * nat * positive)) : prim_env :=    
-    List.fold_left (fun map '(k, s, b, ar, p) => M.set p (k, s, b, ar) map) prims (M.empty _).  
-  
-  Definition compile_LambdaANF_CPS (prims : list (kername * string * bool * nat * positive)) : CertiCoqTrans toplevel.LambdaBoxLocalTerm LambdaANF_FullTerm :=
-    fun src => 
-      debug_msg "Translating from LambdaBoxLocal to LambdaANF (CPS)" ;;
-      LiftErrorCertiCoqTrans "LambdaANF CPS"
-                             (fun (p : toplevel.LambdaBoxLocalTerm) =>
+  Definition make_prim_env (prims : list (primitive * positive)) : prim_env :=
+    List.fold_left (fun map '(p, pos) => M.set pos p map) prims (M.empty _).
+
+  Definition inductive_entry_aux_east (x : kername * EAst.global_decl) acc : common.ienv :=
+    match x with
+    | (s, EAst.ConstantDecl _) => acc
+    | (s, EAst.InductiveDecl m) =>
+      (s, ibodies_itypPack m.(ind_bodies)) :: acc
+    end.
+
+  Definition inductive_env_east (e : EAst.global_declarations) : common.ienv :=
+    fold_right inductive_entry_aux_east [] e.
+
+  Definition compile_LambdaANF_CPS prims : CertiRocqTrans LambdaBoxEAstTerm LambdaANF_FullTerm :=
+    fun src =>
+      debug_msg "Translating from LambdaBox (EAst) to LambdaANF (CPS)" ;;
+      LiftErrorCertiRocqTrans "LambdaANF CPS"
+                             (fun (p : LambdaBoxEAstTerm) =>
                                 let prim_env := make_prim_env prims in
-                                match convert_top prim_env fun_fun_tag kon_fun_tag default_ctor_tag default_ind_tag next_var p with
+                                let ie := inductive_env_east (fst p) in
+                                match cps.convert_top_cps prim_env fun_fun_tag kon_fun_tag default_ctor_tag default_ind_tag next_var
+                                                          prims (fun _ => None) ie (List.rev (fst p)) (snd p) with
                                 | (compM.Ret e, data) =>
                                   let (_, ctag, itag, ftag, cenv, fenv, nenv, _, _) := data in
                                   Ret (M.empty _, prim_env, cenv, ctag, itag, nenv, fenv, M.empty _, e)
                                 | (compM.Err s, _) => Err s
-                                end) src. 
+                                end) src.
 
-  Definition compile_LambdaANF_ANF (prims : list (kername * string * bool * nat * positive)) : CertiCoqTrans toplevel.LambdaBoxLocalTerm LambdaANF_FullTerm :=
-    fun src => 
-      debug_msg "Translating from LambdaBoxLocal to LambdaANF (ANF)" ;;
-      LiftErrorCertiCoqTrans "LambdaANF ANF"
-                             (fun (p : toplevel.LambdaBoxLocalTerm) =>
+  Definition compile_LambdaANF_ANF prims : CertiRocqTrans LambdaBoxEAstTerm LambdaANF_FullTerm :=
+    fun src =>
+      debug_msg "Translating from LambdaBox (EAst) to LambdaANF (ANF)" ;;
+      LiftErrorCertiRocqTrans "LambdaANF ANF"
+                             (fun (p : LambdaBoxEAstTerm) =>
                                 let prim_env := make_prim_env prims in
-                                match convert_top_anf prim_env fun_fun_tag default_ctor_tag default_ind_tag next_var p with
+                                let ie := inductive_env_east (fst p) in
+                                let '(_, _, _, _, dcm) :=
+                                  CertiRocq.LambdaBox_to_LambdaANF.common.convert_env default_ctor_tag default_ind_tag ie in
+                                match CertiRocq.LambdaBox_to_LambdaANF.anf.convert_top_anf
+                                        fun_fun_tag default_ctor_tag prim_env
+                                        default_ind_tag next_var dcm
+                                        prims (fun _ => None) ie (List.rev (fst p)) (snd p) with
                                 | (compM.Ret e, data) =>
                                   let (_, ctag, itag, ftag, cenv, fenv, nenv, _, _) := data in
                                   Ret (M.empty _, prim_env, cenv, ctag, itag, nenv, fenv, M.empty _, e)
@@ -82,8 +102,8 @@ Section IDENT.
   (** * Definition of LambdaANF backend pipelines *)
 
   (* Add all names to name env *)
-  Definition update_var (names : cps_util.name_env) (x : var)
-    : cps_util.name_env :=
+  Definition update_var (names : term_util.name_env) (x : var)
+    : term_util.name_env :=
     match M.get x names with
     | Some (nNamed _) => names
     | Some nAnon => M.set x (nNamed "x") names
@@ -94,13 +114,13 @@ Section IDENT.
     List.fold_left update_var xs names.
 
   (** Adds missing names to name environment for the C translation *)
-  Fixpoint add_binders_exp (names : cps_util.name_env) (e : exp)
+  Fixpoint add_binders_exp (names : term_util.name_env) (e : exp)
     : name_env :=
     match e with
     | Econstr x _ _ e
     | Eprim_val x _ e
     | Eprim x _ _ e
-    | Eletapp x _ _ _ e          
+    | Eletapp x _ _ _ e
     | Eproj x _ _ _ e => add_binders_exp (update_var names x) e
     | Ecase _ pats =>
       List.fold_left (fun names p => add_binders_exp names (snd p)) pats names
@@ -108,7 +128,7 @@ Section IDENT.
     | Ehalt _ => names
     | Efun B e => add_binders_exp (add_binders_fundefs names B) e
     end
-  with add_binders_fundefs (names : cps_util.name_env) (B : fundefs) : cps_util.name_env :=
+  with add_binders_fundefs (names : term_util.name_env) (B : fundefs) : term_util.name_env :=
          match B with
          | Fcons f _ xs e1 B1 =>
            add_binders_fundefs (add_binders_exp (update_vars (update_var names f) xs) e1) B1
@@ -119,7 +139,7 @@ Section IDENT.
     match c_data with
     | mkCompData nv nc ni nf cenv fenv nenv imap log =>
       let msg := cps_show.show_exp nenv cenv false e in
-      mkCompData nv nc ni nf cenv fenv nenv imap ("term" :: msg :: log)      
+      mkCompData nv nc ni nf cenv fenv nenv imap ("term" :: msg :: log)
     end.
 
 
@@ -137,12 +157,12 @@ Section IDENT.
     }.
 
 
-  Definition anf_trans : Type := exp -> comp_data -> error exp * comp_data. 
-
-
   Definition anf_state (A : Type) := comp_data -> error A * comp_data.
 
-  
+
+  Definition anf_trans : Type := exp -> anf_state exp.
+
+
   Global Instance MonadState : Monad anf_state :=
     { ret A x := (fun c_data  => (Ret x, c_data));
       bind A B m f :=
@@ -153,17 +173,17 @@ Section IDENT.
            | Err s => (Err s, c_data')
            end)
     }.
-  
+
 
   Definition id_trans : anf_trans := fun e c => (Ret e, c).
-  
+
   Section Pipeline.
 
     Context (anf_opts : anf_options).
 
     Definition time_anf {A B} (name : string) (f : A -> anf_state B) : A -> anf_state B :=
-      fun x s => if time anf_opts then timePhase name (f x) s else f x s. 
-    
+      fun x s => if time anf_opts then timePhase name (f x) s else f x s.
+
     (* Optimizing λANF pipeline *)
 
     Definition anf_pipeline (e : exp) : anf_state exp :=
@@ -189,7 +209,7 @@ Section IDENT.
       e <- (if inl_known anf_opts then
               time_anf "Inline known functions inside wrappers" (inline_lifted next_var 10 1000) e
             else id_trans e) ;;
-      ret e. 
+      ret e.
 
 
     Definition run_anf_pipeline (t : LambdaANF_FullTerm) : error LambdaANF_FullTerm * string :=
@@ -209,7 +229,7 @@ Section IDENT.
         let (_, ctag, itag, ftag, cenv, fenv, nenv, _, log) := c_data' in
         (Ret (prims, cenv, ctag, itag, nenv, fenv, M.empty _, e), log_to_string log)
       end%positive.
-    
+
   End Pipeline.
 
 
@@ -231,10 +251,10 @@ Section IDENT.
    *)
 
   Open Scope nat.
-  
+
   Definition make_anf_options (opts : Options) : anf_options :=
     let '(inl_wrappers, inl_known, no_push, inl_before, inl_after) :=
-        let default := (true, false, 1, true, true) in 
+        let default := (true, false, 1, true, true) in
         match anf_conf opts with
         | 0 => default
         | 1 => (false, false, 1, true, true)
@@ -253,7 +273,7 @@ Section IDENT.
        cps  := negb (Pipeline_utils.direct opts);
        do_lambda_lift := (1 <=? o_level opts);
        args := if anf_conf opts =? 9 then 1000 else Pipeline_utils.c_args opts;
-       no_push := no_push; 
+       no_push := no_push;
        inl_wrappers := inl_wrappers;
        inl_known    := inl_known;
        inl_before   := inl_before;
@@ -262,21 +282,21 @@ Section IDENT.
     |}.
 
 
-  Definition compile_LambdaANF : CertiCoqTrans LambdaANF_FullTerm LambdaANF_FullTerm :=
-    fun src => 
-      debug_msg "Compiling LambdaANF" ;;
-      opts <- get_options ;;
-      (* Make anf_options *)
-      let anf_opts := make_anf_options opts in
-      LiftErrorLogCertiCoqTrans "LambdaANF Pipeline" (run_anf_pipeline anf_opts) src.
-
-
-  Definition compile_LambdaANF_debug : CertiCoqTrans LambdaANF_FullTerm LambdaANF_FullTerm :=
+  Definition compile_LambdaANF : CertiRocqTrans LambdaANF_FullTerm LambdaANF_FullTerm :=
     fun src =>
       debug_msg "Compiling LambdaANF" ;;
       opts <- get_options ;;
       (* Make anf_options *)
       let anf_opts := make_anf_options opts in
-      LiftErrorLogCertiCoqTrans "LambdaANF Pipeline" (run_anf_pipeline anf_opts) src.
+      LiftErrorLogCertiRocqTrans "LambdaANF Pipeline" (run_anf_pipeline anf_opts) src.
+
+
+  Definition compile_LambdaANF_debug : CertiRocqTrans LambdaANF_FullTerm LambdaANF_FullTerm :=
+    fun src =>
+      debug_msg "Compiling LambdaANF" ;;
+      opts <- get_options ;;
+      (* Make anf_options *)
+      let anf_opts := make_anf_options opts in
+      LiftErrorLogCertiRocqTrans "LambdaANF Pipeline" (run_anf_pipeline anf_opts) src.
 
 End IDENT.

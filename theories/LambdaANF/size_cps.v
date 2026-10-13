@@ -1,11 +1,11 @@
-(* Size of LambdaANF term, values, environments, etc. Part of the CertiCoq project.
+(* Size of LambdaANF term, values, environments, etc. Part of the CertiRocq project.
  * Author: Anonymized, 2017
  *)
 
 
-From Coq Require Import ZArith List SetoidList NArith.BinNat PArith.BinPos
+From Stdlib Require Import ZArith List SetoidList NArith.BinNat PArith.BinPos
      MSets.MSetRBT Sets.Ensembles micromega.Lia Sorting.Permutation.
-From CertiCoq.LambdaANF Require Import List_util cps ctx identifiers Ensembles_util set_util cps_util map_util.
+From CertiRocq.LambdaANF Require Import List_util term ctx identifiers Ensembles_util set_util term_util map_util.
 
 Require Import compcert.lib.Maps.
 
@@ -34,20 +34,20 @@ Fixpoint sizeOf_exp (e : exp) : nat :=
     | Eprim x _ ys e => 1 + length ys + sizeOf_exp e
     | Ehalt x => 1
   end
-with sizeOf_fundefs (B : fundefs) : nat := 
+with sizeOf_fundefs (B : fundefs) : nat :=
        match B with
          | Fcons _ _ xs e B =>
            1 + sizeOf_exp e + sizeOf_fundefs B
          | Fnil => 0
        end.
 
-Definition cost_cc (e : exp) : nat := 
-  match e with 
+Definition cost_cc (e : exp) : nat :=
+  match e with
   | Econstr x t ys e => 1 + length ys
   | Eproj x t n y e => 1
   | Ecase y cl => 1
   | Eapp f t ys => 1 + length ys
-  | Eletapp x f t ys e => 1 + length ys 
+  | Eletapp x f t ys e => 1 + length ys
   | Efun B e => 1 + PS.cardinal (fundefs_fv B)
   | Eprim_val x p e => 1
   | Eprim x f ys e => 1 + length ys
@@ -66,7 +66,7 @@ Fixpoint sizeOf_exp_ctx (c : exp_ctx) : nat :=
     | Ecase_c _ l1 _ c l2  =>
       1 + sizeOf_exp_ctx c
       + fold_left (fun s p => s + sizeOf_exp (snd p)) l1 0
-      + fold_left (fun s p => s + sizeOf_exp (snd p)) l2 0 
+      + fold_left (fun s p => s + sizeOf_exp (snd p)) l2 0
     | Efun1_c B c => 1 + sizeOf_exp_ctx c
     | Efun2_c B e => 1 + sizeOf_fundefs_ctx B + sizeOf_exp e
   end
@@ -93,7 +93,7 @@ Qed.
 
 Lemma max_ptree_with_measure_spec1 {A} (f : A -> nat) i rho x v :
   rho ! x = Some v ->
-  f v <= max_ptree_with_measure f i rho. 
+  f v <= max_ptree_with_measure f i rho.
 Proof.
   intros Hget. unfold max_ptree_with_measure.
   rewrite M.fold_spec.
@@ -102,13 +102,13 @@ Proof.
   revert H. generalize (M.elements rho).
   intros l Hin. induction l. now inv Hin.
   inv Hin.
-  - simpl. eapply le_trans. now apply Max.le_max_r.
+  - simpl. eapply Nat.le_trans. now apply Nat.le_max_r.
     eapply fold_left_extensive.
-    intros [y u] n; simpl. now apply Max.le_max_l.
-  - simpl. eapply le_trans. now eapply IHl; eauto. 
+    intros [y u] n; simpl. now apply Nat.le_max_l.
+  - simpl. eapply Nat.le_trans. now eapply IHl; eauto.
     eapply fold_left_monotonic.
     intros. now eapply Nat.max_le_compat_r; eauto.
-    now apply Max.le_max_l.
+    now apply Nat.le_max_l.
 Qed.
 
 
@@ -142,7 +142,7 @@ Definition sizeOf_val (i : nat) (v : val) : nat :=
         | Vconstr _ vs =>
           max_list_nat_with_measure (sizeOf_val' i) 0 vs
         | Vfun rho B f =>
-          max (sizeOf_fundefs B) (sizeOf_env i' rho)           
+          max (sizeOf_fundefs B) (sizeOf_env i' rho)
         | Vprim _ => 0
         | Vint x => 0
       end
@@ -162,11 +162,11 @@ Lemma sizeOf_val_Vconstr_unfold i t v l:
   max (sizeOf_val i v) (sizeOf_val i (Vconstr t l)).
 Proof.
   destruct i; simpl (sizeOf_val _ (Vconstr t _)); eauto.
-  rewrite <- (Max.max_0_l (sizeOf_val' (S i) v)).
+  rewrite <- (Nat.max_0_l (sizeOf_val' (S i) v)).
   unfold max_list_nat_with_measure.
   rewrite (fold_left_comm (fun (c : nat) (v0 : val) => Init.Nat.max c (sizeOf_val' (S i) v0))); eauto.
-  rewrite Max.max_comm, sizeOf_val_eq. reflexivity.
-  intros. now rewrite <- !Max.max_assoc, (Max.max_comm (sizeOf_val' (S i) y)).
+  rewrite Nat.max_comm, sizeOf_val_eq. reflexivity.
+  intros. now rewrite <- !Nat.max_assoc, (Nat.max_comm (sizeOf_val' (S i) y)).
 Qed.
 
 Lemma sizeOf_val_monotic i i' v :
@@ -179,7 +179,7 @@ Proof.
   - destruct i'; simpl; lia.
   - destruct i'; try now (simpl; lia).
     rewrite !sizeOf_val_Vconstr_unfold.
-    eapply Nat.max_le_compat; eauto. 
+    eapply Nat.max_le_compat; eauto.
   - destruct i'; try now (simpl; lia).
     eapply Nat.max_le_compat; eauto.
     unfold sizeOf_env. eapply Mfold_monotonic; eauto.
@@ -232,7 +232,7 @@ with num_fundefs_in_fundefs (B : fundefs) : nat :=
     | Fnil => 0
   end.
 
-Fixpoint num_fundefs_val (i : nat) (v : val) := 
+Fixpoint num_fundefs_val (i : nat) (v : val) :=
   match i with
   | 0 => 0
   | S i' =>
@@ -267,9 +267,9 @@ Lemma max_list_nat_acc_spec {A} (xs : list A) f acc :
   max_list_nat_with_measure f acc xs =
   max acc (max_list_nat_with_measure f 0 xs).
 Proof.
-  rewrite <- (Max.max_0_r acc) at 1. generalize 0.
+  rewrite <- (Nat.max_0_r acc) at 1. generalize 0.
   revert acc. induction xs; intros acc n; simpl; eauto.
-  rewrite <- Max.max_assoc. eauto.
+  rewrite <- Nat.max_assoc. eauto.
 Qed.
 
 Lemma sizeOf_env_set_lists k rho rho' xs vs :
@@ -283,7 +283,7 @@ Proof.
   (*   simpl in Hset. destruct (set_lists xs vs rho) eqn:Hset'; try discriminate. *)
   (*   inv Hset. rewrite sizeOf_env_set; simpl. *)
   (*   rewrite max_list_nat_acc_spec. *)
-  (*   rewrite <- Max.max_assoc. eapply Nat.max_compat. reflexivity. *)
+  (*   rewrite <- Nat.max_assoc. eapply Nat.max_compat. reflexivity. *)
   (*   eauto. *)
 Abort.
 
@@ -291,7 +291,7 @@ Lemma sizeOf_env_get k rho x v :
   rho ! x = Some v ->
   sizeOf_val k v <= sizeOf_env k rho.
 Proof.
-  intros Hget. 
+  intros Hget.
   unfold sizeOf_env. rewrite <- sizeOf_val_eq.
   eapply max_ptree_with_measure_spec1.
   eassumption.
@@ -301,19 +301,19 @@ Lemma sizeOf_env_get_list k rho xs vs :
   get_list xs rho = Some vs ->
   max_list_nat_with_measure (sizeOf_val k) 0 vs  <= sizeOf_env k rho.
 Proof.
-  revert vs. induction xs; intros vs Hgetl. 
+  revert vs. induction xs; intros vs Hgetl.
   - destruct vs; try discriminate; simpl; lia.
   - simpl in Hgetl.
     destruct (rho ! a) eqn:Hgeta; try discriminate.
     destruct (get_list xs rho) eqn:Hgetl'; try discriminate.
     destruct vs; try discriminate. inv Hgetl. simpl.
-    eapply le_trans.
-    + rewrite <- (Max.max_0_l (sizeOf_val k v0)).
+    eapply Nat.le_trans.
+    + rewrite <- (Nat.max_0_l (sizeOf_val k v0)).
       unfold max_list_nat_with_measure.
       rewrite (fold_left_comm (fun (c : nat) (v : val) => Init.Nat.max c (sizeOf_val k v))).
       eapply Nat.max_le_compat. eapply IHxs. reflexivity.
       eapply sizeOf_env_get. eassumption.
-      intros x v1 v2. rewrite <- !Max.max_assoc, (Max.max_comm (sizeOf_val k v1)).
+      intros x v1 v2. rewrite <- !Nat.max_assoc, (Nat.max_comm (sizeOf_val k v1)).
       reflexivity.
     + eapply Nat.max_lub; lia.
 Qed.
@@ -344,7 +344,7 @@ Lemma sizeOf_exp_ctx_comp_ctx_mut :
   (forall B e,
      sizeOf_fundefs_ctx (comp_f_ctx_f B e) = sizeOf_fundefs_ctx B + sizeOf_exp_ctx e).
 Proof.
-  exp_fundefs_ctx_induction IHe IHB; 
+  exp_fundefs_ctx_induction IHe IHB;
   try (intros C; simpl; eauto; rewrite IHe; lia);
   try (intros C; simpl; eauto; rewrite IHB; lia).
   (* probably tactic misses an intro pattern *)
@@ -372,7 +372,7 @@ Lemma fun_in_fundefs_sizeOf_exp B f tau xs e :
 Proof.
   intros Hin. induction B; inv Hin.
   - inv H. simpl; lia.
-  - eapply le_trans. eapply IHB; eauto.
+  - eapply Nat.le_trans. eapply IHB; eauto.
     simpl. lia.
 Qed.
 
@@ -386,8 +386,8 @@ Lemma max_exp_env_grt_1 k e rho :
   1 <= max_exp_env k e rho.
 Proof.
   unfold max_exp_env.
-  eapply le_trans. now apply sizeOf_exp_grt_1.
-  eapply Max.le_max_l.
+  eapply Nat.le_trans. now apply sizeOf_exp_grt_1.
+  eapply Nat.le_max_l.
 Qed.
 
 (** Lemmas used to establish the upper bound given the IH *)
@@ -444,12 +444,12 @@ Proof.
     eassumption.
     rewrite <- HP in Hnd.
     eapply Permutation_length in HP. rewrite <- HP.
-    rewrite app_length.
+    rewrite length_app.
     eapply (Included_trans (FromList l2) (Setminus var (occurs_free e) [set v])) in Hin2;
       [| now apply Setminus_Included ].
     eapply Same_set_FromList_length in Hin1.
     eapply IHe in Hin2. lia.
-    eapply NoDup_cons_r; eauto. 
+    eapply NoDup_cons_r; eauto.
     eapply NoDup_cons_l; eauto.
   - rewrite <- (Union_Empty_set_neut_r [set v]) in Heq.
     rewrite <- FromList_nil, <- FromList_cons in Heq.
@@ -460,56 +460,56 @@ Proof.
     eassumption.
     rewrite <- HP in Hnd.
     eapply Permutation_length in HP. rewrite <- HP.
-    rewrite !app_length.
+    rewrite !length_app.
     eapply IHe in Hin1. eapply IHl in Hin2. simpl in *. lia.
-    eapply NoDup_cons_r; eauto. 
+    eapply NoDup_cons_r; eauto.
     eapply NoDup_cons_l; eauto.
     eapply Singleton_Included. eauto.
   - edestruct (@FromList_Union_split var) as [l1 [l2 [HP [Hin1 Hin2]]]].
     eassumption.
     rewrite <- HP in Hnd.
     eapply Permutation_length in HP. rewrite <- HP.
-    rewrite app_length.
+    rewrite length_app.
     eapply (Included_trans (FromList l2) (Setminus var (occurs_free e) [set v])) in Hin2;
       [| now apply Setminus_Included ].
     rewrite <- (Union_Empty_set_neut_r [set v0]) in Hin1.
     rewrite <- FromList_nil, <- FromList_cons in Hin1.
     eapply Same_set_FromList_length in Hin1.
     eapply IHe in Hin2. simpl in *. lia.
-    eapply NoDup_cons_r; eauto. 
+    eapply NoDup_cons_r; eauto.
     eapply NoDup_cons_l; eauto.
   - edestruct (@FromList_Union_split var) as [l1 [l2 [HP [Hin1 Hin2]]]].
     eassumption.
     rewrite <- HP in Hnd.
     eapply Permutation_length in HP. rewrite <- HP.
-    rewrite app_length.
+    rewrite length_app.
     eapply (Included_trans (FromList l2) (Setminus var (occurs_free e) [set x])) in Hin2;
       [| now apply Setminus_Included ].
     rewrite <- FromList_cons in Hin1.
     eapply Same_set_FromList_length in Hin1.
     eapply IHe in Hin2. simpl in Hin1. lia.
-    eapply NoDup_cons_r; eauto. 
+    eapply NoDup_cons_r; eauto.
     eapply NoDup_cons_l; eauto.
   - edestruct (@FromList_Union_split var) as [l1 [l2 [HP [Hin1 Hin2]]]].
     eassumption.
     rewrite <- HP in Hnd.
     eapply Permutation_length in HP. rewrite <- HP.
-    rewrite app_length.
+    rewrite length_app.
     eapply (Included_trans (FromList l2) (Setminus var (occurs_free e) _)) in Hin2;
       [| now apply Setminus_Included ].
     eapply IHb in Hin1. eapply IHe in Hin2. lia.
-    eapply NoDup_cons_r; eauto. 
+    eapply NoDup_cons_r; eauto.
     eapply NoDup_cons_l; eauto.
   - edestruct (@FromList_Union_split var) as [l1 [l2 [HP [Hin1 Hin2]]]].
     eassumption. rewrite <- HP in Hnd.
     eapply Same_set_FromList_length in Hin1; eauto.
     eapply Permutation_length in HP. rewrite <- HP.
-    rewrite app_length.
+    rewrite length_app.
     rewrite <- (Union_Empty_set_neut_r [set v]) in Hin2.
     rewrite <- FromList_nil, <- FromList_cons in Hin2.
     eapply Same_set_FromList_length in Hin2.
     simpl in *. lia.
-    eapply NoDup_cons_r; eauto. 
+    eapply NoDup_cons_r; eauto.
     eapply NoDup_cons_l; eauto.
   - etransitivity. eapply IHe; eauto; try lia.
     2:{ lia. }
@@ -519,12 +519,12 @@ Proof.
     eassumption.
     rewrite <- HP in Hnd.
     eapply Permutation_length in HP. rewrite <- HP.
-    rewrite app_length.
+    rewrite length_app.
     eapply (Included_trans (FromList l2) (Setminus var (occurs_free e) [set v])) in Hin2;
       [| now apply Setminus_Included ].
     eapply Same_set_FromList_length in Hin1.
     eapply IHe in Hin2. lia.
-    eapply NoDup_cons_r; eauto. 
+    eapply NoDup_cons_r; eauto.
     eapply NoDup_cons_l; eauto.
   - rewrite <- (Union_Empty_set_neut_r [set v]) in Heq.
     rewrite <- FromList_nil, <- FromList_cons in Heq.
@@ -532,13 +532,13 @@ Proof.
   - edestruct (@FromList_Union_split var) as [l1 [l2 [HP [Hin1 Hin2]]]].
     eassumption. rewrite <- HP in Hnd.
     eapply Permutation_length in HP. rewrite <- HP.
-    rewrite app_length.
+    rewrite length_app.
     eapply (Included_trans (FromList l2) (Setminus var _ [set v])) in Hin2;
       [| now apply Setminus_Included ].
     eapply (Included_trans (FromList l1) (Setminus var _ _)) in Hin1;
-      [| now apply Setminus_Included ]. 
+      [| now apply Setminus_Included ].
     eapply IHe in Hin1. eapply IHb in Hin2. lia.
-    eapply NoDup_cons_r; eauto. 
+    eapply NoDup_cons_r; eauto.
     eapply NoDup_cons_l; eauto.
   - rewrite <- FromList_nil in Heq.
     apply Same_set_FromList_length in Heq; eauto.

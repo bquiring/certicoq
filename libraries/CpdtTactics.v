@@ -1,5 +1,5 @@
 (* Copyright (c) 2008-2012, Adam Chlipala
- * 
+ *
  * This work is licensed under a
  * Creative Commons Attribution-Noncommercial-No Derivative Works 3.0
  * Unported License.
@@ -7,7 +7,7 @@
  *   http://creativecommons.org/licenses/by-nc-nd/3.0/
  *)
 
-Require Import Eqdep List Lia.
+From Stdlib Require Import Eqdep List Lia.
 
 Set Implicit Arguments.
 
@@ -108,7 +108,7 @@ Ltac rewriterP := repeat (rewriteHyp; autorewrite with core in *).
 Ltac rewriter := autorewrite with core in *; rewriterP.
 
 (** This one is just so darned useful, let's add it as a hint here. *)
-Global Hint Rewrite app_ass : core.
+Global Hint Rewrite app_assoc : core.
 
 (** Devious marker predicate to use for encoding state within proof goals *)
 Definition done (T : Type) (x : T) := True.
@@ -163,10 +163,10 @@ Ltac un_done :=
            | [ H : done _ |- _ ] => clear H
          end.
 
-Require Import JMeq.
+From Stdlib Require Import JMeq.
 
 (** A more parameterized version of the famous [crush].  Extra arguments are:
-   * - A tuple-list of lemmas we try [inster]-ing 
+   * - A tuple-list of lemmas we try [inster]-ing
    * - A tuple-list of predicates we try inversion for *)
 Ltac crush' lemmas invOne :=
   (** A useful combination of standard automation *)
@@ -197,14 +197,14 @@ Ltac crush' lemmas invOne :=
       end;
       sintuition; rewriter; sintuition;
       (** End with a last attempt to prove an arithmetic fact with [lia], or prove any sort of fact in a context that is contradictory by reasoning that [lia] can do. *)
-      try lia; try (elimtype False; lia)).
+      try lia; try (exfalso; lia)).
 
 (** [crush] instantiates [crush'] with the simplest possible parameters. *)
 Ltac crush := crush' false fail.
 
 (** * Wrap Program's [dependent destruction] in a slightly more pleasant form *)
 
-Require Import Program.Equality.
+From Stdlib Require Import Program.Equality.
 
 (** Run [dependent destruction] on [E] and look for opportunities to simplify the result.
    The weird introduction of [x] helps get around limitations of [dependent destruction], in terms of which sorts of arguments it will accept (e.g., variables bound to hypotheses within Ltac [match]es). *)

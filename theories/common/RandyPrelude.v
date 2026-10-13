@@ -5,16 +5,16 @@
 ** because of types like Sort, ...
 *)
 
-Require Import FunInd.
-Require Import Coq.Lists.List.
-Require Import Coq.Bool.Bool.
-Require Import Coq.Bool.DecBool.
-Require Import Coq.Arith.Arith.
-Require Import Coq.micromega.Lia.
+From Stdlib Require Import FunInd.
+From Stdlib Require Import Lists.List.
+From Stdlib Require Import Bool.Bool.
+From Stdlib Require Import Bool.DecBool.
+From Stdlib Require Import Arith.Arith.
+From Stdlib Require Import micromega.Lia.
 Require Import Common.exceptionMonad.
-Require Import FunInd.
-Require Import Coq.Arith.Div2 Coq.Numbers.Natural.Peano.NPeano Coq.Program.Wf.
-Require Import MetaCoq.Utils.bytestring.
+From Stdlib Require Import FunInd.
+From Stdlib Require Import (*Arith.Div2*) (*Numbers.Natural.Peano.NPeano*) Program.Wf.
+Require Import MetaRocq.Utils.bytestring.
 Local Open Scope bs_scope.
 Local Open Scope bool.
 Local Open Scope list.
@@ -37,12 +37,12 @@ Program Fixpoint nat_to_string (n:nat) {measure n}: string :=
   (match n <? 10 as x return n <? 10 = x -> string with
      | true => fun _ => digit_to_string n
      | false => fun pf =>
-                  let m := NPeano.Nat.div n 10 in
+                  let m := Nat.div n 10 in
                   (nat_to_string m) ++ (digit_to_string (n - 10 * m))
    end eq_refl)%nat.
 Next Obligation.
-  apply (NPeano.Nat.div_lt n 10%nat).
-  destruct n. unfold NPeano.Nat.ltb in *. simpl in *.
+  apply (Nat.div_lt n 10%nat).
+  destruct n. unfold Nat.ltb in *. simpl in *.
   discriminate. auto with arith.
   auto with arith.
 Defined.
@@ -342,7 +342,7 @@ Lemma wf_ind:
   eapply (complete_nat_induct (fun n:nat => forall (y:A), n = f y -> P y)).
   - intros. apply wfih. intros. eapply H. rewrite H0. apply H1. reflexivity.
   - reflexivity.
-Qed.  
+Qed.
 
 Definition wf_rec:
   forall (A:Type) (f:A -> nat) (P:A -> Type)
@@ -358,7 +358,7 @@ Defined.
 
 
 (** Want to unfold all occurrances of nm in context and goal
- *** don't know how  
+ *** don't know how
 Ltac Unfold nm :=
   repeat match goal with
         | [ H:(_ nm _) |- _ ] => unfold nm in H
@@ -371,7 +371,7 @@ Definition no_step {A:Set} (R:A -> A -> Prop) (a:A) :=
   forall (b:A), ~ R a b.
 
 Lemma neq_sym: forall (A:Type) (a b:A), a <> b -> b <> a.
-  intuition.
+  intuition auto.
 Qed.
 
 Function list_to_zero (n:nat) : list nat :=
@@ -409,7 +409,7 @@ Lemma list_to_zero_S:
 Proof.
   induction n. reflexivity. cbn. reflexivity.
 Qed.
-  
+
 
 Definition list_to_n (n:nat) : list nat := List.rev (list_to_zero n).
 
@@ -423,7 +423,7 @@ Qed.
 Lemma list_to_n_length:
   forall m, List.length (list_to_n m) = m.
 Proof.
-  intros. unfold list_to_n. rewrite rev_length. apply list_to_zero_length.
+  intros. unfold list_to_n. rewrite length_rev. apply list_to_zero_length.
 Qed.
 
 Lemma list_to_n_S:
@@ -431,7 +431,7 @@ Lemma list_to_n_S:
 Proof.
   induction n; reflexivity.
 Qed.
-  
+
 Fixpoint exnNth (A:Type) (xs:list A) (n:nat) : exception A :=
   match xs, n with
   | nil, _ =>
@@ -442,11 +442,11 @@ Fixpoint exnNth (A:Type) (xs:list A) (n:nat) : exception A :=
   end.
 
 Lemma bool_not_neq: forall (b1 b2:bool), (~ b1 <> b2) <-> b1 = b2.
-  split; induction b1; induction b2; intuition.
+  split; induction b1; induction b2; intuition auto.
 Qed.
 
 Lemma bool_neq_false: forall (b:bool), (b <> false) <-> b = true.
-  split; induction b; intuition.
+  split; induction b; intuition auto.
 Qed.
 
 Lemma bs_not_cons_bs:
@@ -457,7 +457,7 @@ Lemma bs_not_cons_bs:
 Qed.
 
 Lemma deMorgan_impl: forall (A B:Prop), (A -> B) -> (~B -> ~A).
-  intuition.
+  intuition auto.
 Qed.
 
 Lemma orb3_true_elim:
@@ -467,16 +467,16 @@ Lemma orb3_true_elim:
   assert (j1: {b1 = true} + {b2 || b3 = true}).
   { apply orb_true_elim. rewrite orb_assoc. assumption. }
   destruct j1.
-  - intuition.
+  - intuition auto.
   - assert (j2: {b2 = true} + {b3 = true}). apply (orb_true_elim _ _ e).
-    destruct j2; intuition.
-Qed.  
+    destruct j2; intuition auto.
+Qed.
 
 Lemma fold_left_bool_mono:
   forall (ds:list bool),
     fold_left (fun (b c:bool) => b || c) ds false = true ->
     fold_left (fun (b c:bool) => b || c) ds true = true.
-  induction ds; intro h; intuition. induction a. 
+  induction ds; intro h; intuition auto. induction a.
   - exact h.
   - simpl. simpl in h. apply (IHds h).
 Qed.
@@ -510,7 +510,7 @@ Qed.
 Lemma nat_compare_EQ: forall n, Nat.compare n n = Eq.
   intro n. apply (proj2 (Nat.compare_eq_iff n n)). reflexivity.
 Qed.
-Hint Rewrite nat_compare_EQ : core.
+#[global] Hint Rewrite nat_compare_EQ : core.
 
 Lemma notNone_Some:
   forall (A:Type) (o:option A), o <> None -> exists a, o = Some a.
@@ -537,9 +537,9 @@ induction m; simpl; reflexivity.
 Qed.
 
 Lemma max_fst: forall m n, max m n >= m.
-induction m; induction n; simpl; intuition.
+induction m; induction n; simpl; intuition auto with arith.
 Qed.
 
 Lemma max_snd: forall m n, max m n >= n.
-induction m; induction n; simpl; intuition.
+induction m; induction n; simpl; intuition auto with arith.
 Qed.

@@ -1,13 +1,13 @@
 Require Import Common.compM Common.Pipeline_utils.
-Require Import LambdaANF.cps LambdaANF.cps_util LambdaANF.set_util LambdaANF.identifiers LambdaANF.ctx
+Require Import LambdaANF.term LambdaANF.term_util LambdaANF.set_util LambdaANF.identifiers LambdaANF.ctx
         LambdaANF.List_util LambdaANF.functions LambdaANF.cps_show LambdaANF.Ensembles_util LambdaANF.tactics.
-Require Import Coq.ZArith.ZArith.
-From Coq Require Import Lists.List MSets.MSets MSets.MSetRBT Numbers.BinNums
-     NArith.BinNat PArith.BinPos 
+From Stdlib Require Import ZArith.ZArith.
+From Stdlib Require Import Lists.List MSets.MSets MSets.MSetRBT Numbers.BinNums
+     NArith.BinNat PArith.BinPos
      Sets.Ensembles micromega.Lia.
 Require Import Common.AstCommon.
 Require Import ExtLib.Structures.Monads.
-Require Import MetaCoq.Utils.bytestring.
+Require Import MetaRocq.Utils.bytestring.
 Import ListNotations Nnat MonadNotation.
 
 Require Import compcert.lib.Maps.
@@ -32,10 +32,10 @@ Section CompM.
                                            inline_map : M.tree nat; (* marks functions for inlining *)
                                            log : list string;
                                          }.
-  
+
   (* TODO: better name? *)
   Definition compM' := compM unit (comp_data * S).
-  
+
   (* Get the environment name *)
   Definition get_name_env (_ : unit) : compM' name_env :=
     s <- compM.get ;;
@@ -70,14 +70,14 @@ Section CompM.
     compM.put (mkCompData ((n+1)%positive) c i f e fenv nenv' imap log, st) ;;
     ret n.
 
-  
+
   Definition get_names_lst (old : list var) (suff : string) : compM' (list var) :=
     mapM (fun o => get_name o suff) old.
 
   Definition get_names_lst' (old : list var) (suff : string) (nenv_old : name_env) : compM' (list var) :=
     mapM (fun o => get_name' o suff nenv_old) old.
 
-  
+
   (** Get a fresh name, and register a pretty name by appending a suffix to the pretty name of the old var *)
   Definition get_named (s : name) : compM' var :=
     p <- compM.get ;;
@@ -86,9 +86,23 @@ Section CompM.
     compM.put (mkCompData ((n+1)%positive) c i f e fenv names' imap log, st) ;;
     ret n.
 
+  Definition reserve_named_var (x : var) (s : name) : compM' var :=
+    p <- compM.get ;;
+    let '(mkCompData n c i f e fenv names imap log, st) := p in
+    let names' := M.set x s names in
+    let n' := Pos.succ (Pos.max n x) in
+    compM.put (mkCompData n' c i f e fenv names' imap log, st) ;;
+    ret x.
+
+  Definition set_var_name (x : var) (s : name) : compM' unit :=
+    p <- compM.get ;;
+    let '(mkCompData n c i f e fenv names imap log, st) := p in
+    let names' := M.set x s names in
+    compM.put (mkCompData n c i f e fenv names' imap log, st).
+
   Definition get_named_lst (s : list name) : compM' (list var) := mapM get_named s.
 
-  
+
   (** Get a fresh name, and create a new pretty name *)
   Definition get_named_str (name : string) : compM' var :=
     p <- compM.get ;;
@@ -134,7 +148,7 @@ Section CompM.
 
   Definition add_log (msg : string) (c : comp_data) : comp_data :=
     let '(mkCompData x c i f e fenv names imap log) := c in
-    mkCompData x c i f e fenv names imap (msg :: log). 
+    mkCompData x c i f e fenv names imap (msg :: log).
 
   (* Log a new message *)
   Definition log_msg (msg : string) : compM' unit :=
@@ -156,7 +170,7 @@ Section CompM.
     let 'mkCompData x c i f e fenv names imap log := c in
     (f, mkCompData x c i (f + 1)%positive e (M.set f (N.of_nat arity, (List_util.fromN (0%N) arity)) fenv) names imap log).
 
-  
+
   (** Get a fresh function tag and register it in fun_env *)
 
   (* TODO write in terms of make_ftag *)
@@ -165,12 +179,12 @@ Section CompM.
     let '(mkCompData x c i f e fenv names imap log, st) := p in
     compM.put (mkCompData x c i (f + 1)%positive e (M.set f (arity, (fromN (0%N) (BinNat.N.to_nat arity))) fenv) names imap log, st) ;;
     ret f.
-  
+
   Definition run_compM {A} (m: compM' A) (st : comp_data) (s : S)
     : error A * (comp_data * S) := runState m tt (st, s).
 
   Definition pack_data := mkCompData.
-  
+
   Definition put_inline_map (imap : M.tree nat) (c : comp_data) : comp_data :=
     let 'mkCompData x c i f cenv fenv names _ log := c in
     mkCompData x c i f cenv fenv names imap log.
@@ -182,7 +196,7 @@ Section CompM.
   Definition get_ctor_env (cenv : ctor_env) (c : comp_data) : ctor_env :=
     let '(mkCompData next ctag itag ftag cenv fenv names imap log) := c in
     cenv.
-  
+
 End CompM.
 
 (* Lemmas about [get_name] and [get_names_lst] *)
@@ -195,7 +209,7 @@ Lemma Disjoint_Range (x1 x2 x1' x2' : positive) :
 Proof.
   intros Hleq. constructor. intros x Hin. inv Hin.
   unfold Range, Ensembles.In in *. simpl in *. zify. lia.
-Qed.    
+Qed.
 
 Lemma Range_Subset (x1 x2 x1' x2' : positive) :
   (x1 <= x1')%positive ->
@@ -205,7 +219,7 @@ Proof.
   intros H1 H2. intros z Hin. unfold Range, Ensembles.In in *.
   inv Hin. zify. lia.
 Qed.
-          
+
 Lemma fresh_Range S (x1 x2 : positive) :
   identifiers.fresh S x1 ->
   Range x1 x2 \subset S.
@@ -213,7 +227,7 @@ Proof.
   intros Hin z Hin'. inv Hin'. eapply Hin. eassumption.
 Qed.
 
-Opaque bind ret. 
+Opaque bind ret.
 
 (** Spec for [get_name] *)
 Lemma get_name_spec A S y str :
@@ -223,16 +237,16 @@ Lemma get_name_spec A S y str :
        x \in S /\
        x \in Range (next_var (fst s)) (next_var (fst s')) /\
        (next_var (fst s) < next_var (fst s'))%positive /\
-       identifiers.fresh (S \\ [set x]) (next_var (fst s'))      
-  }}.  
-Proof. 
+       identifiers.fresh (S \\ [set x]) (next_var (fst s'))
+  }}.
+Proof.
   eapply pre_post_mp_l.
-  eapply bind_triple. now eapply get_triple.  
+  eapply bind_triple. now eapply get_triple.
   intros [[] w1] [[] w2].
   eapply pre_post_mp_l. simpl.
   eapply bind_triple. now eapply put_triple.
   intros x [r3 w3].
-  eapply return_triple. 
+  eapply return_triple.
   intros ? [r4 w4] H2. inv H2. intros [H1 H2]. inv H1; inv H2. intros.
   split. eapply H. reflexivity. split. unfold Range, Ensembles.In. simpl. zify. lia.
   simpl. split. zify; lia.
@@ -248,7 +262,7 @@ Lemma get_names_lst_spec A S ns str :
        FromList xs \subset S /\
        FromList xs \subset Range (next_var (fst s)) (next_var (fst s')) /\
        (next_var (fst s) <= next_var (fst s'))%positive /\
-       identifiers.fresh (S \\ FromList xs) (next_var (fst s')) }}.  
+       identifiers.fresh (S \\ FromList xs) (next_var (fst s')) }}.
 Proof.
   unfold get_names_lst. revert S; induction ns; intros S.
   - simpl. eapply return_triple.
@@ -278,16 +292,16 @@ Lemma get_name'_spec A S y str old_m :
        x \in S /\
        x \in Range (next_var (fst s)) (next_var (fst s')) /\
        (next_var (fst s) < next_var (fst s'))%positive /\
-       identifiers.fresh (S \\ [set x]) (next_var (fst s'))      
-  }}.  
-Proof. 
+       identifiers.fresh (S \\ [set x]) (next_var (fst s'))
+  }}.
+Proof.
   eapply pre_post_mp_l.
-  eapply bind_triple. now eapply get_triple.  
+  eapply bind_triple. now eapply get_triple.
   intros [[] w1] [[] w2].
   eapply pre_post_mp_l. simpl.
   eapply bind_triple. now eapply put_triple.
   intros x [r3 w3].
-  eapply return_triple. 
+  eapply return_triple.
   intros ? [r4 w4] H2. inv H2. intros [H1 H2]. inv H1; inv H2. intros.
   split. eapply H. reflexivity. split. unfold Range, Ensembles.In. simpl. zify. lia.
   simpl. split. zify; lia.
@@ -303,7 +317,7 @@ Lemma get_names_lst'_spec A S ns str old_m :
        FromList xs \subset S /\
        FromList xs \subset Range (next_var (fst s)) (next_var (fst s')) /\
        (next_var (fst s) <= next_var (fst s'))%positive /\
-       identifiers.fresh (S \\ FromList xs) (next_var (fst s')) }}.  
+       identifiers.fresh (S \\ FromList xs) (next_var (fst s')) }}.
 Proof.
   unfold get_names_lst. revert S; induction ns; intros S.
   - simpl. eapply return_triple.
@@ -344,7 +358,7 @@ Lemma put_state_spec A st :
 Proof.
   unfold get_state. eapply bind_triple.
   - eapply get_triple.
-  - intros x w. simpl. eapply pre_curry_l. intros Heq; subst. 
+  - intros x w. simpl. eapply pre_curry_l. intros Heq; subst.
     eapply pre_post_mp_l. eapply post_weakening.
     2:{ eapply put_triple. } firstorder. simpl in *. subst. reflexivity.
     simpl in *. subst. reflexivity.

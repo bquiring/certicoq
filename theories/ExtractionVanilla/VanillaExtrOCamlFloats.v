@@ -21,7 +21,7 @@ you will just need to add in the "_CoqProject" file: [test.v], [-I extracted]
 and the list of [extracted/*.ml] and [extracted/*.mli] files, then add
 [CAMLFLAGS += -w -33] in the Makefile.local file.  *)
 
-From Coq Require Floats Extraction.
+From Stdlib Require Floats Extraction.
 
 (** Basic data types used by some primitive operators. *)
 
@@ -44,9 +44,9 @@ Extract Constant PrimFloat.classify => "Float64.classify".
 Extract Constant PrimFloat.abs => "Float64.abs".
 Extract Constant PrimFloat.sqrt => "Float64.sqrt".
 Extract Constant PrimFloat.opp => "Float64.opp".
-Extract Constant PrimFloat.eqb => "fun x y -> Caml_bool.to_coq (Float64.eq x y)".
-Extract Constant PrimFloat.ltb => "fun x y -> Caml_bool.to_coq (Float64.lt x y)".
-Extract Constant PrimFloat.leb => "fun x y -> Caml_bool.to_coq (Float64.le x y)".
+Extract Constant PrimFloat.eqb => "Float64.eq".
+Extract Constant PrimFloat.ltb => "Float64.lt".
+Extract Constant PrimFloat.leb => "Float64.le".
 Extract Constant PrimFloat.compare => "Float64.compare".
 Extract Constant PrimFloat.mul => "Float64.mul".
 Extract Constant PrimFloat.add => "Float64.add".

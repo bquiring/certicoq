@@ -9,20 +9,22 @@ Require compcert.common.AST
         compcert.lib.Coqlib
         compcert.lib.Floats
         compcert.common.Globalenvs
-        Int31.
+    (*    Int31*).
 
 Require Glue.glue
         Compiler.pipeline.
 
-Require Import Coq.extraction.Extraction.
+From Stdlib Require Import extraction.Extraction.
 Require Import VanillaExtrOCamlInt63 VanillaExtrOCamlFloats.
+From Stdlib Require Import ExtrOCamlPString.
 (* Standard lib *)
 
-(** Extraction to Ocaml : use of basic Ocaml types: be careful that this should 
-  the representation in ML should exactly match the one of certicoq. 
+(** Extraction to Ocaml : use of basic Ocaml types: be careful that this should
+  the representation in ML should exactly match the one of certirocq.
   E.g. no constructor swapping allowed.
   *)
 
+Extract Inductive bool => bool [ true false ]. (* Swaps the constructors *)
 Extract Inductive unit => unit [ "()" ].
 Extract Inductive list => list [ "[]" "( :: )" ].
 Extract Inductive prod => "( * )" [ "" ].
@@ -35,10 +37,13 @@ Extract Inductive prod => "( * )" [ "" ].
     (if ... then ... else false) and (if ... then true else ...).
 *)
 
-Extract Inlined Constant andb => "(fun x y -> match x with Coq_true -> Coq_true | _ -> y)".
-Extract Inlined Constant orb => "(fun x y -> match x with Coq_false -> y | Coq_true -> x)".
+Extract Inlined Constant andb => "(&&)".
+Extract Inlined Constant orb => "(||)".
 
-Require Import ZArith NArith.
+From Stdlib Require Import ZArith NArith.
+
+Extraction Inline Program.Wf.Fix_F_sub.
+Extraction Inline Program.Wf.Fix_sub.
 
 Set Extraction KeepSingleton.
 
@@ -79,27 +84,22 @@ Extraction Inline Equations.Init.hidebody.
 Extraction Inline Equations.Prop.DepElim.solution_left.
 
 (* Avoid name clashes with OCaml or Coq module names *)
-Extraction Blacklist config List String Nat Int Ast Universes UnivSubst Typing Retyping 
+Extraction Blacklist config List String Nat Int Ast Universes UnivSubst Typing Retyping
            OrderedType Logic Common Equality Char char uGraph
            Instances Classes Term Monad Coqlib Errors Compile Checker Eq Classes0 Numeral
            Uint63 Number Values.
 
-(* Cutting the dependency to R.
-Extract Inlined Constant Fcore_defs.F2R => "fun _ -> assert false".
-Extract Inlined Constant Fappli_IEEE.FF2R => "fun _ -> assert false".
-Extract Inlined Constant Fappli_IEEE.B2R => "fun _ -> assert false".
-Extract Inlined Constant Fappli_IEEE.round_mode => "fun _ -> assert false".
-Extract Inlined Constant Fcalc_bracket.inbetween_loc => "fun _ -> assert false". *)
-
 Set Warnings "-extraction-reserved-identifier".
 Set Warnings "-extraction-opaque-accessed".
 
-Extraction Library Zeven.
-Extraction Library Zeven.
-Extraction Library ZArith_dec.
-Extraction Library Sumbool.
-Extraction Library Zbool.
-Extraction Library SpecFloat.
+Set Extraction Output Directory ".".
+
+(* Extraction Library Zeven. *)
+(* Extraction Library Zeven. *)
+(* Extraction Library ZArith_dec. *)
+(* Extraction Library Sumbool. *)
+(* Extraction Library Zbool. *)
+(* Extraction Library SpecFloat. *)
 Separate Extraction FloatOps.Prim2SF.
 
 Cd "ExtractionVanilla".
@@ -115,9 +115,10 @@ Separate Extraction
          String.length
          Compiler.pipeline.make_opts
          Compiler.pipeline.compile
+         Erasure.default_dearging_config
          Glue.glue.generate_glue
          Glue.ffi.generate_ffi
-         cps.M.elements
+         term.M.elements
          Compiler.pipeline.show_IR.
 
 Recursive Extraction Library Ascii.

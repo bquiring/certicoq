@@ -1,15 +1,15 @@
-Require Import MetaCoq.Utils.bytestring.
+Require Import MetaRocq.Utils.bytestring.
 Set Implicit Arguments.
 From ExtLib Require Import Monads.
 Import MonadNotation.
 
 Inductive exception (A:Type) := Exc (_:string) | Ret (_:A).
 Arguments Ret [A].
-Arguments Exc [A] _%bs.
+Arguments Exc [A] _%_bs.
 
 Definition ret {A: Type} (x: A) := Ret x.
 Definition raise {A: Type} (str:string) := @Exc A str.
-Arguments raise {A} _%bs.
+Arguments raise {A} _%_bs.
 
 Definition bind
     {A B: Type} (a: exception A) (f: A -> exception B): exception B :=
@@ -42,7 +42,7 @@ intros.
 induction a; repeat reflexivity.
 Qed.
 
-Instance exn_monad : Monad exception :=
+#[global] Instance exn_monad : Monad exception :=
   { ret := @ret; bind := @bind }.
 
 Definition catch {T} (e : exception T) (f : string -> exception T) : exception T :=
@@ -51,7 +51,7 @@ Definition catch {T} (e : exception T) (f : string -> exception T) : exception T
   | Exc s => f s
   end.
 
-Instance exn_monad_exc : MonadExc string (fun A => exception A) :=
+#[global] Instance exn_monad_exc : MonadExc string (fun A => exception A) :=
   { raise := @raise; catch := @catch }.
 
 Definition econs

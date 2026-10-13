@@ -1,10 +1,10 @@
 
-Require Import Coq.Lists.List.
-Require Import Coq.Strings.String.
-Require Import Coq.Strings.Ascii.
-Require Import Coq.Bool.Bool.
-Require Import Coq.Bool.DecBool.
-Require Import Coq.Arith.Arith.
+From Stdlib Require Import Lists.List.
+From Stdlib Require Import Strings.String.
+From Stdlib Require Import Strings.Ascii.
+From Stdlib Require Import Bool.Bool.
+From Stdlib Require Import Bool.DecBool.
+From Stdlib Require Import Arith.Arith.
 
 
 Class Eq (A:Type) :=
@@ -12,7 +12,6 @@ Class Eq (A:Type) :=
     eq_dec : forall (x y:A), {x = y} + {x<>y}
   }.
 
-Instance NatEq: Eq nat := { eq_dec := eq_nat_dec }.
-Instance AsciiEq: Eq ascii := { eq_dec:= ascii_dec }.
-Instance StringEq: Eq string := { eq_dec:= string_dec }.
-
+#[global] Instance NatEq: Eq nat := { eq_dec := eq_nat_dec }.
+#[global] Instance AsciiEq: Eq ascii := { eq_dec:= ascii_dec }.
+#[global] Instance StringEq: Eq string := { eq_dec:= string_dec }.
