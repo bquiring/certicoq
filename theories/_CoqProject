@@ -124,6 +124,7 @@ LambdaWeb/passes.v
 LambdaCFA/spec.v
 LambdaCFA/sound.v
 LambdaCFA/impl.v
+LambdaCFA/impl_complete.v
 LambdaCFA/compile.v
 
 # Codegen

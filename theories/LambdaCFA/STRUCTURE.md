@@ -13,6 +13,7 @@ open, and it is linked against unknown code.
 | `spec.v` | Labels, abstract values (sets of labels, possibly infinite), solutions, and the constraints `ok`/`ok_top` that relate a λANF program to its annotation |
 | `sound.v` | The step-indexed cross-language relation indexed by abstract values; import/export with the interface relation `V_a`; the fundamental property; `ok_top_E_anno`: the constraints imply `E_anno_top`; the postcondition `P_eq` (equal fuel) and its obligations |
 | `impl.v` | The annotation of a solution (`anno`), a checker proven sound (`check_spec`), the trivial solution (`triv_top`), the solver, and `annotate` with `annotate_correct` |
+| `impl_complete.v` | The solver never runs out of fuel (`solve_some`), nor does the merging of internal webs (`merge_done`) |
 | `compile.v` | The compiler of `LambdaWeb/passes.v` with this analysis (`compile_cfa_refines`, assuming only the λANF optimizations); linking of separately annotated units (`annotate_preserves_linking`), including with units annotated by any other analysis proven against `E_anno_top` (`annotate_links_with_lib`, `annotate_links_with_client`) |
 
 Main results: `ok_top_E_anno` (sound.v), `annotate_correct` (impl.v),
@@ -88,13 +89,26 @@ analyses need not coordinate their internal web names.
 ## The implementation
 
 The solver (`impl.v`, not verified) iterates a pass over the program until the
-state stops growing, up to `10 + 4 * size` rounds.  The pass propagates
-flows, arguments and results, exposure and escape.  It then merges the internal
-webs of labels that share a use site.  A label's internal web is
-`Internal p` for the smallest label index `p` in its class.
+state stops growing.  The pass propagates flows, arguments and results,
+exposure and escape.  It then merges the internal webs of labels that share a
+use site.  A label's internal web is `Internal p` for the smallest label index
+`p` in its class.
+
+Both loops run on binary fuel (`loop`), which is enough to always finish
+(`impl_complete.v`):
+
+* Every operation of a pass only adds to the state.  The state is measured
+  within the universe of the program (its variables, their labels, and the
+  largest arity), and that measure is bounded by `ubound`, roughly
+  variables² × arity.  The fuel is one more than the bound, so a pass that
+  changes nothing is always reached (`solve_some`).  A fuel linear in the
+  program is not enough: a value that only enters a chain of n functions
+  after the previous value has gone through it takes n rounds per value.
+* Each merging pass only lowers webs, so the sum of the webs bounds the
+  passes (`merge_done`).
 
 `check` decides `ok_top` for the annotation of the solution (`check_spec`).
-When the check fails, or the solver runs out of rounds, `annotate` falls back
+When the check fails, `annotate` falls back
 to the trivial solution, which annotates every value as exposed (`triv_top`).
 So `annotate` is correct for every program.
 
@@ -110,4 +124,8 @@ fallback), never soundness.
   web, the encoded label).  The pipeline's correctness does not depend on
   them, but a backend that looks function tags up in a function environment
   would need entries for them.
-* The solver is unverified; only its result is checked.
+* The solver is unverified; only its result is checked.  Its termination
+  is proven, but not that its result passes the check, so the fallback is
+  still reachable in principle.  The loop also stops when the measure within
+  the universe stops growing; that the state never leaves the universe (so
+  this is a true fixpoint) is not proven.

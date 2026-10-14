@@ -5,10 +5,9 @@
    propagates flows, exposure (escape) and the arguments and results of
    functions until nothing changes, then merges the internal webs of the
    labels that share a use site.  The checker decides [ok_top] for the
-   annotation of the solution; when it fails (or the solver runs out of
-   fuel), the analysis falls back to the trivial solution, in which every
-   value is exposed.  So [annotate] always inhabits the annotation relation
-   ([annotate_correct]). *)
+   annotation of the solution; when it fails, the analysis falls back to
+   the trivial solution, in which every value is exposed.  So [annotate]
+   always inhabits the annotation relation ([annotate_correct]). *)
 
 From Stdlib Require Import NArith.BinNat ZArith.ZArith Lists.List Sets.Ensembles Bool
      micromega.Lia.
@@ -599,27 +598,104 @@ with step_fds (B : term.fundefs) (s : st) : st :=
   | term.Fnil => s
   end.
 
-Definition card_map (m : M.t PS.t) : nat := M.fold1 (fun n A => n + PS.cardinal A) m 0.
-Definition card_lists (m : M.t (list PS.t)) : nat :=
-  M.fold1 (fun n l => fold_left (fun n A => n + PS.cardinal A) l (n + length l)) m 0.
+(** ** Iteration with binary fuel
 
-(** Every operation of [step] adds to the state, so an unchanged size is a
-    fixpoint. *)
-Definition measure (s : st) : nat :=
-  card_map (st_v s) + card_lists (st_a s) + card_lists (st_f s) + card_map (st_r s) +
-  PS.cardinal (st_top s) + PS.cardinal (st_x s).
+    [loop f stop p a] applies [f] at most [p] times, stopping with [Done] as
+    soon as [stop a (f a)].  The fuel is a binary number, so a large bound
+    costs nothing to compute. *)
+
+Inductive res (A : Type) := Done (a : A) | More (a : A).
+Arguments Done {A}.
+Arguments More {A}.
+
+Definition loop1 {A} (f : A -> A) (stop : A -> A -> bool) (a : A) : res A :=
+  let a' := f a in if stop a a' then Done a' else More a'.
+
+Definition bind_more {A} (r : res A) (k : A -> res A) : res A :=
+  match r with Done a => Done a | More a => k a end.
+
+Fixpoint loop {A} (f : A -> A) (stop : A -> A -> bool) (p : positive) (a : A) : res A :=
+  match p with
+  | xH => loop1 f stop a
+  | xO p => bind_more (loop f stop p a) (loop f stop p)
+  | xI p => bind_more (loop1 f stop a) (fun a => bind_more (loop f stop p a) (loop f stop p))
+  end.
+
+(** ** The universe of the program
+
+    The variables of the program, its labels, and the largest arity.  The
+    state only ever mentions these, so the part of the state within them
+    bounds the number of rounds. *)
+
+Definition add_list (l : list var) (acc : PS.t) : PS.t := fold_left (fun a x => PS.add x a) l acc.
+
+Fixpoint vars_acc (e : term.exp) (acc : PS.t) : PS.t :=
+  match e with
+  | term.Econstr x _ ys e => vars_acc e (add_list (x :: ys) acc)
+  | term.Ecase y cl =>
+      (fix vars_br (cl : list (term.ctor_tag * term.exp)) (acc : PS.t) :=
+         match cl with
+         | [] => acc
+         | (_, e) :: cl => vars_br cl (vars_acc e acc)
+         end) cl (PS.add y acc)
+  | term.Eproj x _ _ y e => vars_acc e (PS.add x (PS.add y acc))
+  | term.Eletapp x f _ ys e => vars_acc e (add_list (x :: f :: ys) acc)
+  | term.Efun B e => vars_acc e (vars_fds B acc)
+  | term.Eapp f _ ys => add_list (f :: ys) acc
+  | term.Eprim_val x _ e => vars_acc e (PS.add x acc)
+  | term.Eprim x _ ys e => vars_acc e (add_list (x :: ys) acc)
+  | term.Ehalt x => PS.add x acc
+  end
+with vars_fds (B : term.fundefs) (acc : PS.t) : PS.t :=
+  match B with
+  | term.Fcons g _ xs b B => vars_fds B (vars_acc b (add_list (g :: xs) acc))
+  | term.Fnil => acc
+  end.
+
+Fixpoint arity (e : term.exp) : nat :=
+  match e with
+  | term.Econstr _ _ ys e | term.Eletapp _ _ _ ys e | term.Eprim _ _ ys e => Nat.max (length ys) (arity e)
+  | term.Ecase _ cl =>
+      (fix arity_br (cl : list (term.ctor_tag * term.exp)) :=
+         match cl with
+         | [] => 0
+         | (_, e) :: cl => Nat.max (arity e) (arity_br cl)
+         end) cl
+  | term.Eproj _ _ _ _ e | term.Eprim_val _ _ e => arity e
+  | term.Efun B e => Nat.max (arity_fds B) (arity e)
+  | term.Eapp _ _ ys => length ys
+  | term.Ehalt _ => 0
+  end
+with arity_fds (B : term.fundefs) : nat :=
+  match B with
+  | term.Fcons _ _ xs b B => Nat.max (length xs) (Nat.max (arity b) (arity_fds B))
+  | term.Fnil => 0
+  end.
+
+Definition ulabels (vs : PS.t) : PS.t :=
+  PS.fold (fun x U => PS.add (lfun x) (PS.add (lcon x) U)) vs (PS.singleton ltop).
+
+(** ** The measure: the size of the state within the universe *)
+
+Definition sum {A} (f : A -> nat) (l : list A) : nat := fold_right (fun a n => f a + n) 0 l.
+
+Definition cnt (U : PS.t) (A : PS.t) : nat := PS.fold (fun l n => if PS.mem l U then S n else n) A 0.
+
+Definition cnt_list (U : PS.t) (N : nat) (l : list PS.t) : nat :=
+  Nat.min (length l) N + sum (fun i => cnt U (nth i l PS.empty)) (seq 0 N).
+
+Definition umeasure (Ks : list var) (U : PS.t) (N : nat) (s : st) : nat :=
+  sum (fun k => cnt U (gv (st_v s) k)) Ks + sum (fun k => cnt_list U N (gl (st_a s) k)) Ks +
+  sum (fun k => cnt_list U N (gl (st_f s) k)) Ks + sum (fun k => cnt U (gv (st_r s) k)) Ks +
+  cnt U (st_top s) + cnt U (st_x s).
+
+(** A bound on [umeasure], computed in binary *)
+Definition ubound (nk nu na : N) : N :=
+  (nk * nu + nk * (na + na * nu) + nk * (na + na * nu) + nk * nu + nu + nu)%N.
 
 Definition round (e : term.exp) (s : st) : st :=
   let s := step TTop e s in
   escape (st_top s) s.
-
-Fixpoint iterate (n : nat) (e : term.exp) (s : st) : option st :=
-  match n with
-  | 0 => None
-  | S n =>
-      let s' := round e s in
-      if Nat.eqb (measure s') (measure s) then Some s' else iterate n e s'
-  end.
 
 Definition init (e : term.exp) : st :=
   let s := mk_st (M.empty _) (M.empty _) (M.empty _) (M.empty _) PS.empty PS.empty in
@@ -663,20 +739,20 @@ Definition merge_site (s : st) (iw : M.t positive) (site : bool * var) : M.t pos
 Definition iw_eqb (ls : list lab) (iw1 iw2 : M.t positive) : bool :=
   forallb (fun l => Pos.eqb (find_w iw1 l) (find_w iw2 l)) ls.
 
-Fixpoint merge_iter (n : nat) (s : st) (ss : list (bool * var)) (ls : list lab) (iw : M.t positive) : M.t positive :=
-  match n with
-  | 0 => iw
-  | S n =>
-      let iw' := fold_left (merge_site s) ss iw in
-      if iw_eqb ls iw iw' then iw' else merge_iter n s ss ls iw'
-  end.
+(** Each pass only lowers webs, so the sum of the webs of the labels bounds
+    the number of passes. *)
+Definition merge_fuel (ls : list lab) : positive :=
+  N.succ_pos (fold_left (fun n l => (n + Npos l)%N) ls 0%N).
+
+Definition merge_loop (s : st) (ss : list (bool * var)) (ls : list lab) : res (M.t positive) :=
+  loop (fun iw => fold_left (merge_site s) ss iw) (iw_eqb ls) (merge_fuel ls) (M.empty _).
 
 Definition all_labels (s : st) : list lab :=
   PS.elements (M.fold1 (fun acc A => PS.union acc A) (st_v s) PS.empty).
 
 Definition webs_of (e : term.exp) (s : st) : M.t positive :=
   let ls := all_labels s in
-  let iw := merge_iter (S (length ls)) s (sites e) ls (M.empty _) in
+  let iw := match merge_loop s (sites e) ls with Done iw | More iw => iw end in
   fold_left (fun m l => M.set l (find_w iw l) m) ls (M.empty _).
 
 Definition sol_of (e : term.exp) (s : st) : sol * aset :=
@@ -687,30 +763,20 @@ Definition sol_of (e : term.exp) (s : st) : sol * aset :=
           (AFin (st_x s)) (webs_of e s),
    AFin (st_top s)).
 
-(** The bound on the number of rounds *)
-Fixpoint esize (e : term.exp) : nat :=
-  match e with
-  | term.Econstr _ _ _ e | term.Eproj _ _ _ _ e | term.Eprim_val _ _ e | term.Eprim _ _ _ e
-  | term.Eletapp _ _ _ _ e => S (esize e)
-  | term.Ecase _ cl =>
-      S ((fix esize_br (cl : list (term.ctor_tag * term.exp)) :=
-            match cl with
-            | [] => 0
-            | (_, e) :: cl => esize e + esize_br cl
-            end) cl)
-  | term.Efun B e => esize_fds B + esize e
-  | term.Eapp _ _ _ | term.Ehalt _ => 1
-  end
-with esize_fds (B : term.fundefs) : nat :=
-  match B with
-  | term.Fcons _ _ _ b B => S (esize b + esize_fds B)
-  | term.Fnil => 0
-  end.
+(** The rounds of the solver, with fuel one more than the bound on the
+    measure *)
+Definition solve_loop (e : term.exp) : res st :=
+  let vs := vars_acc e PS.empty in
+  let Ks := PS.elements vs in
+  let U := ulabels vs in
+  let N := arity e in
+  let fuel := N.succ_pos (ubound (N.of_nat (length Ks)) (N.of_nat (PS.cardinal U)) (N.of_nat N)) in
+  loop (round e) (fun s s' => Nat.eqb (umeasure Ks U N s') (umeasure Ks U N s)) fuel (init e).
 
 Definition solve (e : term.exp) : option (sol * aset) :=
-  match iterate (10 + 4 * esize e) e (init e) with
-  | Some s => Some (sol_of e s)
-  | None => None
+  match solve_loop e with
+  | Done s => Some (sol_of e s)
+  | More _ => None
   end.
 
 (** * The analysis *)
