@@ -120,6 +120,7 @@ LambdaWeb/anno.v
 LambdaWeb/pipeline.v
 LambdaWeb/passes.v
 LambdaWeb/retag.v
+LambdaWeb/stats.v
 
 # LambdaCFA: a compositional 0-CFA annotating λANF with webs
 LambdaCFA/spec.v

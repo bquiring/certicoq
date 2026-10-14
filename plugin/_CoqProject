@@ -539,3 +539,5 @@ extraction/retag.mli
 extraction/retag.ml
 extraction/fast.mli
 extraction/fast.ml
+extraction/stats.mli
+extraction/stats.ml

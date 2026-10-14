@@ -5,7 +5,8 @@ From CertiRocq Require Import
      LambdaANF.inline LambdaANF.uncurry_proto LambdaANF.closure_conversion
      LambdaANF.closure_conversion LambdaANF.hoisting LambdaANF.dead_param_elim LambdaANF.lambda_lifting.
 From CertiRocq.LambdaBox_to_LambdaANF Require Import common.
-From CertiRocq.LambdaWeb Require syntax retag dpe_impl cp_impl.
+From CertiRocq.LambdaWeb Require syntax retag dpe_impl cp_impl stats.
+From MetaRocq.Utils Require MRString.
 From CertiRocq.LambdaCFA Require impl fast.
 From CertiRocq.LambdaBox_to_LambdaANF Require anf cps.
 (* From CertiRocq.Codegen Require Import LambdaANF_to_Clight. *)
@@ -180,16 +181,44 @@ Section IDENT.
 
   Definition id_trans : anf_trans := fun e c => (Ret e, c).
 
+  (** Reports a message at compile time; it is the identity in Rocq, and
+      prints the message in the extracted compiler. *)
+  Definition web_note {A} (msg : string) (x : A) : A := x.
+
+  Definition show_N (n : N) : string := MRString.string_of_Z (Z.of_N n).
+
+  Definition show_stats (st0 st1 st2 : LambdaWeb.stats.stats) : string :=
+    ("functions " ++ show_N (LambdaWeb.stats.n_fun st0) ++
+     " (internal " ++ show_N (LambdaWeb.stats.n_fun_int st0) ++ "), calls " ++
+     show_N (LambdaWeb.stats.n_call st0) ++ " (internal " ++ show_N (LambdaWeb.stats.n_call_int st0) ++
+     "), constructors " ++ show_N (LambdaWeb.stats.n_con st0) ++
+     " (internal " ++ show_N (LambdaWeb.stats.n_con_int st0) ++ "), uses " ++
+     show_N (LambdaWeb.stats.n_use st0) ++ " (internal " ++ show_N (LambdaWeb.stats.n_use_int st0) ++
+     "); DPE: parameters " ++ show_N (LambdaWeb.stats.n_param st0) ++ " -> " ++
+     show_N (LambdaWeb.stats.n_param st1) ++ ", arguments " ++ show_N (LambdaWeb.stats.n_arg st0) ++
+     " -> " ++ show_N (LambdaWeb.stats.n_arg st1) ++ ", bindings " ++ show_N (LambdaWeb.stats.n_bind st0) ++
+     " -> " ++ show_N (LambdaWeb.stats.n_bind st1) ++ "; CP: bindings " ++
+     show_N (LambdaWeb.stats.n_bind st1) ++ " -> " ++ show_N (LambdaWeb.stats.n_bind st2) ++
+     ", parameters " ++ show_N (LambdaWeb.stats.n_param st1) ++ " -> " ++
+     show_N (LambdaWeb.stats.n_param st2))%bs.
+
   (** Web optimizations: annotate the program with webs by the 0-CFA, run the
       λweb passes, and erase the webs, with fresh function tags for the
       internal webs. *)
   Definition web_trans : anf_trans :=
     fun e c =>
       let 'mkCompData nv nc ni nf cenv fenv names imap log := c in
-      let ew := LambdaWeb.cp_impl.cp_top (LambdaWeb.dpe_impl.dpe_top
-                                           (LambdaCFA.fast.annotate_fast (LambdaWeb.syntax.Exposed 1%positive) e)) in
+      let w_con := LambdaWeb.syntax.Exposed 1%positive in
+      let '(sl, _) := LambdaCFA.fast.analyze_fast w_con e in
+      let fallback := match LambdaCFA.spec.s_ex sl with LambdaCFA.spec.AAll => true | _ => false end in
+      let e0 := LambdaCFA.impl.anno w_con sl e in
+      let e1 := LambdaWeb.dpe_impl.dpe_top e0 in
+      let ew := LambdaWeb.cp_impl.cp_top e1 in
+      let msg := ("Web optimizations: " ++ (if fallback then "analysis fell back to the trivial solution; " else "") ++
+                  show_stats (LambdaWeb.stats.stats_of e0) (LambdaWeb.stats.stats_of e1)
+                             (LambdaWeb.stats.stats_of ew))%bs in
       let '(e', s) := LambdaWeb.retag.erase_rt ew (LambdaWeb.retag.mk_rt (M.empty _) nf fenv) in
-      (Ret e', mkCompData nv nc ni (LambdaWeb.retag.rt_next s) cenv (LambdaWeb.retag.rt_fenv s) names imap log).
+      web_note msg (Ret e', mkCompData nv nc ni (LambdaWeb.retag.rt_next s) cenv (LambdaWeb.retag.rt_fenv s) names imap log).
 
   Section Pipeline.
 

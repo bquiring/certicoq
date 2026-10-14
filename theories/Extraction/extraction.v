@@ -43,6 +43,10 @@ Extract Constant AstCommon.timePhase =>
                Feedback.msg_debug (Pp.str (Printf.sprintf ""Time elapsed in %s:  %f"" (Caml_bytestring.caml_string_of_bytestring c) time));
                temp)".
 
+(* Report the statistics of the web optimizations *)
+Extract Constant LambdaANF.toplevel.web_note =>
+"(fun s x -> Feedback.msg_notice (Pp.str (Caml_bytestring.caml_string_of_bytestring s)); x)".
+
 (* Int31
 Extract Inductive Int31.digits => "bool" [ "false" "true" ].
 Extract Inductive Int31.int31 => "int" [ "Camlrocq.Int31.constr" ] "Camlrocq.Int31.destr".
