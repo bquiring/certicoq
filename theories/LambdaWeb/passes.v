@@ -65,7 +65,7 @@ Section Steps.
     (forall w lams, WM.get w L = Some lams ->
                     exists it, Forall (fun c => exists info, M.get c cenv = Some info /\
                                                              term.ctor_ind_tag info = it) lams) ->
-    (forall c code wc n, T ! c = Some (code, wc, n) -> Code Btop code) ->
+    (forall c code wc n args, T ! c = Some (code, wc, n, args) -> Code Btop code) ->
     trans_top L T Btop e et -> web_n cenv 1 e et.
   Proof.
     intros HL HT Htop. econstructor; [ | | eapply P_ge_web_post ].
@@ -112,9 +112,9 @@ Proof.
   do 3 eexists. split; [ reflexivity | split; [ reflexivity |] ].
   split; [| split ].
   - match goal with
-    | [ Hk : forallb (sel_w _) (fd_webs f) = true, Hfd : dfn_ok_fd _ _ _ _ _ _ [] f = true |- _ ] =>
-        pose proof (proj2 (dfn_ok_trans _ _ _ _ _ _ jw) f [] Hfd) as Hb;
-        rewrite (recs_of_keep _ _ _ Hk) in Hb; exact Hb
+    | [ Hk : forallb (sel_w _) (fd_webs f) = true, Hfd : dfn_ok_fd _ _ _ _ _ _ [] [] f = true |- _ ] =>
+        pose proof (proj2 (dfn_ok_trans _ _ _ _ _ _ jw) f [] [] Hfd) as Hb;
+        rewrite (recs_with_keep _ _ _ _ Hk) in Hb; exact Hb
     end.
   - rewrite <- bnames_fnames. eapply nodupb_spec. eassumption.
   - eapply (proj1 (dfn_ok_trans _ _ _ _ _ _ jw)). eassumption.

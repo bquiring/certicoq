@@ -89,7 +89,7 @@ Qed.
 
 Section Transform.
 
-  Variables (L : WM.t (list ctor_tag)) (T : M.t (var * web * nat)) (Btop : fundefs).
+  Variables (L : WM.t (list ctor_tag)) (T : M.t (var * web * nat * list arg)) (Btop : fundefs).
   Variable (tagof : M.t ctor_tag).   (* the tags of the wrappers *)
   Variable (m : var).                (* the variables above [m] are fresh *)
   Variable (thr : nat).              (* largest continuation that is duplicated *)
@@ -105,16 +105,18 @@ Section Transform.
   Lemma in_code_true z : in_code z = true -> Code Btop z.
   Proof. unfold in_code. intros H. eapply bnames_name_in. eapply memb_spec. eassumption. Qed.
 
-  Definition fresh_vars (n : nat) : list var := map (fun i => (m + Pos.of_nat (S (S i)))%positive) (seq 0 n).
+  (** Fresh variables: [jvar], then the fields, then the sibling records *)
+  Definition fresh_from (b n : nat) : list var :=
+    map (fun i => (m + Pos.of_nat (S (S (b + i))))%positive) (seq 0 n).
   Definition jvar : var := (m + 1)%positive.
 
-  Lemma fresh_vars_length n : length (fresh_vars n) = n.
-  Proof. unfold fresh_vars. rewrite length_map, length_seq. reflexivity. Qed.
+  Lemma fresh_from_length b n : length (fresh_from b n) = n.
+  Proof. unfold fresh_from. rewrite length_map, length_seq. reflexivity. Qed.
 
   Definition mk_alt (c : ctor_tag) : alt :=
     match T ! c with
-    | Some (code, wc, n) => (c, code, wc, fresh_vars n)
-    | None => (c, 1%positive, Internal 1%positive, [])
+    | Some (code, wc, n, args) => (c, code, wc, fresh_from 0 n, args, fresh_from n (length args))
+    | None => (c, 1%positive, Internal 1%positive, [], [], [])
     end.
 
   Definition alts_of (w : web) : list alt :=
@@ -124,22 +126,41 @@ Section Transform.
   Proof.
     unfold alts_of. intros H. rewrite H. rewrite map_map.
     erewrite map_ext; [ apply map_id |]. intros c. unfold mk_alt.
-    destruct (T ! c) as [[[? ?] ?] |]; reflexivity.
+    destruct (T ! c) as [[[[? ?] ?] ?] |]; reflexivity.
   Qed.
 
   Definition sel_w (w : web) : bool := keeps (sel_L L) w.
 
-  (** The records of the wrappers of a bundle *)
-  Fixpoint recs_of (B : fundefs) : list rec :=
+  (** The records of the wrappers of a bundle, with fields [E] *)
+  Fixpoint recs_with (E : list var) (B : fundefs) : list rec :=
     match B with
     | Fcons f w xs e B =>
-        if sel_w w then recs_of B
+        if sel_w w then recs_with E B
         else match wrapper_fields xs e, tagof ! f with
-             | Some (_, _, zs), Some c => (f, w, c, zs) :: recs_of B
-             | _, _ => recs_of B
+             | Some _, Some c => (f, w, c, E) :: recs_with E B
+             | _, _ => recs_with E B
              end
     | Fnil => []
     end.
+
+  (** The free variables of the wrappers of a bundle *)
+  Fixpoint wfields (B : fundefs) : list var :=
+    match B with
+    | Fcons f w xs e B =>
+        if sel_w w then wfields B
+        else match wrapper_fields xs e with
+             | Some (_, _, zs) => zs ++ wfields B
+             | None => wfields B
+             end
+    | Fnil => []
+    end.
+
+  (** The environment of a bundle: the free variables of its wrappers that
+      are not wrappers of the bundle *)
+  Definition benv (B : fundefs) : list var :=
+    nodup Pos.eq_dec (List.filter (fun z => negb (memb z (rec_names (recs_with [] B)))) (wfields B)).
+
+  Definition recs_of (B : fundefs) : list rec := recs_with (benv B) B.
 
   Fixpoint dfn (e : exp) : exp :=
     match e with
@@ -175,30 +196,59 @@ Section Transform.
 
   (** ** The checker *)
 
+  Definition arg_internalb (a : arg) : bool :=
+    match a with AEnv _ => true | ASib w _ => negb (exposedb w) end.
+
   Definition alts_okb (w : web) (avoid : var -> bool) : bool :=
     match WM.get w L with
     | Some lams =>
         forallb (fun c => match T ! c with
-                          | Some (code, wc, n) =>
-                              nodupb (fresh_vars n) &&
-                              forallb (fun z => negb (avoid z || in_code z)) (fresh_vars n)
+                          | Some (code, wc, n, args) =>
+                              let vs := fresh_from 0 n ++ fresh_from n (length args) in
+                              nodupb vs && forallb (fun z => negb (avoid z || in_code z)) vs &&
+                              forallb arg_internalb args
                           | None => false
                           end) lams
     | None => false
     end.
 
+  Definition var_list_eqb (l1 l2 : list var) : bool :=
+    if list_eq_dec Pos.eq_dec l1 l2 then true else false.
+
+  Definition arg_okb (E : list var) (rs0 : list rec) (a : arg) (z : var) : bool :=
+    match a with
+    | AEnv i => match nth_error E i with Some z' => Pos.eqb z z' | None => false end
+    | ASib w c =>
+        existsb (fun '(f, w', c', E') => Pos.eqb f z && web_eqb w' w && Pos.eqb c' c && var_list_eqb E' E) rs0
+    end.
+
+  Fixpoint args_okb (E : list var) (rs0 : list rec) (args : list arg) (zs : list var) : bool :=
+    match args, zs with
+    | [], [] => true
+    | a :: args, z :: zs => arg_okb E rs0 a z && args_okb E rs0 args zs
+    | _, _ => false
+    end.
+
   (** The wrapper conditions of [TB_sel] *)
-  Definition wrapper_okb (f : var) (w : web) (xs : list var) (e : exp) : bool :=
+  Definition wrapper_okb (E : list var) (rs0 : list rec) (f : var) (w : web) (xs : list var) (e : exp) : bool :=
     match wrapper_fields xs e, tagof ! f, WM.get w L with
     | Some (code, wc, zs), Some c, Some lams =>
         memb c lams &&
         match T ! c with
-        | Some (code', wc', n) => Pos.eqb code code' && web_eqb wc wc' && Nat.eqb n (length zs)
+        | Some (code', wc', n, args) =>
+            Pos.eqb code code' && web_eqb wc wc' && Nat.eqb n (length E) && args_okb E rs0 args zs
         | None => false
         end &&
         in_code code && negb (exposedb wc) && negb (sel_L L wc) &&
         nodupb xs && forallb (fun z => negb (memb z zs)) xs && negb (memb code xs)
     | _, _, _ => false
+    end.
+
+  (** The environment of a bundle is bound or free in it *)
+  Definition benv_okb (B : fundefs) (E : list var) : bool :=
+    match B with
+    | Fcons h _ _ _ _ => forallb (fun z => memb z (bnames B) || is_free (Efun B (Ehalt h)) z) E
+    | Fnil => match E with [] => true | _ => false end
     end.
 
   Fixpoint dfn_ok (e : exp) : bool :=
@@ -225,17 +275,18 @@ Section Transform.
         let rs := recs_of B in
         nodupb (bnames B) && forallb (fun f => negb (in_code f)) (bnames B) &&
         forallb (fun z => negb (memb z (rec_names rs))) (rec_fields rs) &&
-        dfn_ok_fd (recs_of B) B && dfn_ok k
+        benv_okb B (benv B) &&
+        dfn_ok_fd (benv B) (recs_of B) B && dfn_ok k
     | Eprim_val _ _ _ | Eprim _ _ _ _ | Ehalt _ => true
     end
-  with dfn_ok_fd (rs0 : list rec) (B : fundefs) : bool :=
+  with dfn_ok_fd (E : list var) (rs0 : list rec) (B : fundefs) : bool :=
     match B with
     | Fcons f w xs e B =>
         (if sel_w w then
            forallb (fun z => negb (in_code z || memb z (rec_fields rs0) || memb z (rec_names rs0))) xs &&
            dfn_ok e
-         else wrapper_okb f w xs e) &&
-        dfn_ok_fd rs0 B
+         else wrapper_okb E rs0 f w xs e) &&
+        dfn_ok_fd E rs0 B
     | Fnil => true
     end.
 
@@ -250,20 +301,96 @@ Section Transform.
     unfold alts_of. rewrite HL. eapply Forall_forall. intros a Ha.
     eapply in_map_iff in Ha. destruct Ha as (c & <- & Hc).
     eapply forallb_forall in H; [| exact Hc ]. unfold mk_alt.
-    destruct (T ! c) as [[[code wc] n] |] eqn:HT; [| discriminate ].
-    apply andb_true_iff in H. destruct H as [Hnd Hdis].
-    split; [ rewrite fresh_vars_length; exact HT | split; [ eapply nodupb_spec; eassumption |] ].
-    eapply forallb_disjoint; [| exact Hdis ].
-    intros z Hz Hin. apply orb_false_iff in Hz. destruct Hz as [Hz1 Hz2].
-    destruct Hin as [z Hin | z Hin]; [ eapply HS; eassumption | eapply in_code_false; eassumption ].
+    destruct (T ! c) as [[[[code wc] n] args] |] eqn:HT; [| discriminate ].
+    apply andb_true_iff in H. destruct H as [H Hint]. apply andb_true_iff in H. destruct H as [Hnd Hdis].
+    split; [ rewrite fresh_from_length; exact HT |].
+    split; [ eapply nodupb_spec; eassumption |].
+    split; [ eapply fresh_from_length |].
+    split.
+    - eapply Forall_forall. intros a Ha. eapply forallb_forall in Hint; [| exact Ha ].
+      destruct a; simpl in *; [ exact I | apply negb_true_iff; exact Hint ].
+    - eapply forallb_disjoint; [| exact Hdis ].
+      intros z Hz Hin. apply orb_false_iff in Hz. destruct Hz as [Hz1 Hz2].
+      destruct Hin as [z Hin | z Hin]; [ eapply HS; eassumption | eapply in_code_false; eassumption ].
   Qed.
 
   Lemma sel_w_false w : sel_w w = false -> exposedb w = false.
   Proof. unfold sel_w. intros H. apply keeps_internal in H. apply H. Qed.
 
+  Lemma arg_okb_spec E rs0 a z : arg_okb E rs0 a z = true -> arg_ok E rs0 a z.
+  Proof.
+    destruct a as [i | w c]; simpl.
+    - destruct (nth_error E i) as [z' |] eqn:Hz; [| discriminate ]. intros H. apply Pos.eqb_eq in H. congruence.
+    - intros H. eapply existsb_exists in H. destruct H as ([[[f w'] c'] E'] & Hin & H).
+      repeat (apply andb_true_iff in H; destruct H as [H ?]).
+      match goal with [ H : var_list_eqb _ _ = true |- _ ] => unfold var_list_eqb in H end.
+      destruct (list_eq_dec Pos.eq_dec E' E); [| discriminate ]. subst.
+      apply Pos.eqb_eq in H. repeat match goal with
+                                   | [ H : web_eqb _ _ = true |- _ ] => apply web_eqb_eq in H
+                                   | [ H : (_ =? _)%positive = true |- _ ] => apply Pos.eqb_eq in H
+                                   end.
+      subst. exact Hin.
+  Qed.
+
+  Lemma args_okb_spec E rs0 args zs : args_okb E rs0 args zs = true -> Forall2 (arg_ok E rs0) args zs.
+  Proof.
+    revert zs. induction args as [| a args IH]; intros [| z zs] H; simpl in H; try discriminate.
+    - constructor.
+    - apply andb_true_iff in H. destruct H as [H1 H2]. constructor; [ eapply arg_okb_spec | eapply IH ]; eassumption.
+  Qed.
+
+  Lemma benv_okb_spec B E :
+    benv_okb B E = true -> FromList E \subset occurs_free_fundefs B :|: name_in_fundefs B.
+  Proof.
+    destruct B as [h w xs e B' |]; unfold benv_okb.
+    - intros H z Hz. eapply forallb_forall in H; [| exact Hz ]. apply orb_true_iff in H.
+      destruct H as [H | H].
+      + right. eapply bnames_name_in. eapply memb_spec. exact H.
+      + eapply is_free_spec in H. eapply occurs_free_Efun_iff in H. destruct H as [Hn [Hz' | Hz']].
+        * exfalso. eapply occurs_free_Ehalt in Hz'. inv Hz'. eapply Hn. now left.
+        * left. eapply occurs_free_fundefs_iff. split; eassumption.
+    - destruct E; [| discriminate ]. intros _ z Hz. inv Hz.
+  Qed.
+
+  Lemma wrapper_okb_spec E rs0 f w xs e :
+    wrapper_okb E rs0 f w xs e = true ->
+    exists code wc zs c lams args,
+      wrapper_fields xs e = Some (code, wc, zs) /\ tagof ! f = Some c /\
+      WM.get w L = Some lams /\ List.In c lams /\ T ! c = Some (code, wc, length E, args) /\
+      Forall2 (arg_ok E rs0) args zs /\ Code Btop code /\ exposedb wc = false /\ WM.get wc L = None /\
+      NoDup xs /\ Disjoint _ (FromList xs) (FromList zs) /\ ~ List.In code xs.
+  Proof.
+    unfold wrapper_okb. intros H.
+    destruct (wrapper_fields xs e) as [[[code wc] zs] |] eqn:Hwf; [| discriminate ].
+    destruct (tagof ! f) as [c |] eqn:Htag; [| discriminate ].
+    destruct (WM.get w L) as [lams |] eqn:HL; [| discriminate ].
+    apply andb_true_iff in H. destruct H as [H Hcx].
+    apply andb_true_iff in H. destruct H as [H Hdx].
+    apply andb_true_iff in H. destruct H as [H Hnd].
+    apply andb_true_iff in H. destruct H as [H Hsel].
+    apply andb_true_iff in H. destruct H as [H Hwc].
+    apply andb_true_iff in H. destruct H as [H Hcode].
+    apply andb_true_iff in H. destruct H as [Hmem Hm].
+    destruct (T ! c) as [[[[code' wc'] n] args] |] eqn:HT; [| discriminate ].
+    apply andb_true_iff in Hm. destruct Hm as [Hm Hargs].
+    apply andb_true_iff in Hm. destruct Hm as [Hm Hn].
+    apply andb_true_iff in Hm. destruct Hm as [Hc1 Hw1].
+    apply Pos.eqb_eq in Hc1. apply web_eqb_eq in Hw1. apply Nat.eqb_eq in Hn. subst code' wc' n.
+    exists code, wc, zs, c, lams, args. repeat (split; [ eauto; fail |]).
+    split; [ eapply memb_spec; eassumption |].
+    split; [ exact HT |].
+    split; [ eapply args_okb_spec; eassumption |].
+    split; [ eapply in_code_true; eassumption |].
+    split; [ apply negb_true_iff; eassumption |].
+    split; [ apply negb_true_iff in Hsel; unfold sel_L in Hsel; destruct (WM.get wc L); [ discriminate | reflexivity ] |].
+    split; [ eapply nodupb_spec; eassumption |].
+    split; [ eapply (forallb_disjoint _ _ (fun z => memb z zs)); [| eassumption ]; intros z Hz; eapply memb_false; exact Hz |].
+    eapply memb_false. apply negb_true_iff. eassumption.
+  Qed.
+
   Lemma dfn_ok_trans :
     (forall e, dfn_ok e = true -> trans L T Btop e (dfn e)) /\
-    (forall B, forall rs0, dfn_ok_fd rs0 B = true -> trans_bundle L T Btop rs0 B (dfn_fd rs0 B) (recs_of B)).
+    (forall B, forall E rs0, dfn_ok_fd E rs0 B = true -> trans_bundle L T Btop E rs0 B (dfn_fd rs0 B) (recs_with E B)).
   Proof.
     eapply exp_fundefs_ind.
     - (* Econstr *)
@@ -327,6 +454,7 @@ Section Transform.
             eapply in_code_false; eassumption
         end.
       + eapply (forallb_disjoint _ _ (fun z => memb z (rec_names (recs_of B)))); [| eassumption ]. intros z Hz. eapply memb_false. exact Hz.
+      + eapply benv_okb_spec. eassumption.
       + eapply IHe. eassumption.
     - (* Eapp *)
       intros f w ys H. simpl in H. simpl.
@@ -342,7 +470,7 @@ Section Transform.
     - (* Eprim *) intros. constructor.
     - (* Ehalt *) intros. constructor.
     - (* Fcons *)
-      intros f w xs e B IHe IHB rs0 H. simpl in H. simpl.
+      intros f w xs e B IHe IHB E rs0 H. simpl in H. simpl.
       apply andb_true_iff in H. destruct H as [Hf HB].
       destruct (sel_w w) eqn:Hw.
       + apply andb_true_iff in Hf. destruct Hf as [Hxs He].
@@ -354,27 +482,10 @@ Section Transform.
         * exact (in_code_false z Hz1 Hc).
         * exact (memb_false z _ Hz2 Hc).
         * exact (memb_false z _ Hz3 Hc).
-      + unfold wrapper_okb in Hf.
-        destruct (wrapper_fields xs e) as [[[code wc] zs] |] eqn:Hwf; [| discriminate ].
-        destruct (tagof ! f) as [c |] eqn:Htag; [| discriminate ].
-        destruct (WM.get w L) as [lams |] eqn:HL; [| discriminate ].
-        destruct (T ! c) as [[[code' wc'] n] |] eqn:HT; [| repeat (rewrite andb_false_r in Hf || rewrite andb_false_l in Hf); discriminate ].
-        repeat match goal with
-               | [ H : (_ && _) = true |- _ ] => apply andb_true_iff in H; destruct H
-               end.
-        repeat match goal with
-               | [ H : negb _ = true |- _ ] => apply negb_true_iff in H
-               end.
-        apply Pos.eqb_eq in H6. apply web_eqb_eq in H8. apply Nat.eqb_eq in H7. subst code' wc' n.
-        rewrite (wrapper_fields_spec _ _ _ _ _ Hwf).
-        econstructor; eauto.
-        * eapply sel_w_false; eassumption.
-        * eapply memb_spec; eassumption.
-        * eapply in_code_true; eassumption.
-        * unfold sel_L in H3. destruct (WM.get wc L); [ discriminate | reflexivity ].
-        * eapply nodupb_spec; eassumption.
-        * eapply (forallb_disjoint _ _ (fun z => memb z zs)); [| eassumption ]. intros z Hz. eapply memb_false. exact Hz.
-        * eapply memb_false; eassumption.
+      + destruct (wrapper_okb_spec _ _ _ _ _ _ Hf) as
+          (code & wc & zs & c & lams & args & Hwf & Htag & HL & Hin & HT & Hargs & Hcode & Hwc & HLwc & Hnd & Hdxz & Hcx).
+        rewrite Hwf, Htag. rewrite (wrapper_fields_spec _ _ _ _ _ Hwf).
+        econstructor; eauto. eapply sel_w_false; eassumption.
     - (* Fnil *) intros. constructor.
   Qed.
 
@@ -415,9 +526,48 @@ Fixpoint fd_webs (B : fundefs) : list web :=
 
 Definition max_pos (l : list positive) : positive := fold_left Pos.max l 1%positive.
 
+(** The bundles of an expression *)
+Fixpoint bundles_of (e : exp) : list fundefs :=
+  match e with
+  | Econstr _ _ _ _ k | Eproj _ _ _ _ _ k | Eletapp _ _ _ _ k => bundles_of k
+  | Ecase _ _ cl =>
+      (fix go (cl : list (ctor_tag * exp)) :=
+         match cl with
+         | [] => []
+         | (_, e) :: cl => bundles_of e ++ go cl
+         end) cl
+  | Efun B k => B :: bundles_of_fd B ++ bundles_of k
+  | Eapp _ _ _ | Eprim_val _ _ _ | Eprim _ _ _ _ | Ehalt _ => []
+  end
+with bundles_of_fd (B : fundefs) : list fundefs :=
+  match B with
+  | Fcons _ _ _ e B => bundles_of e ++ bundles_of_fd B
+  | Fnil => []
+  end.
+
+Fixpoint fd_list (B : fundefs) : list (var * web * list var * exp) :=
+  match B with
+  | Fcons f w xs e B => (f, w, xs, e) :: fd_list B
+  | Fnil => []
+  end.
+
+Fixpoint index_of (z : var) (l : list var) : nat :=
+  match l with
+  | [] => 0
+  | y :: l => if Pos.eqb z y then 0 else S (index_of z l)
+  end.
+
+(** The argument of a wrapper's field: a sibling record, or a field of the
+    environment *)
+Definition mk_arg (E : list var) (rs : list rec) (z : var) : arg :=
+  match find (fun '(f, _, _, _) => Pos.eqb f z) rs with
+  | Some (_, w, c, _) => ASib w c
+  | None => AEnv (index_of z E)
+  end.
+
 Record dfn_result : Type :=
   { r_L : WM.t (list ctor_tag);
-    r_T : M.t (var * web * nat);
+    r_T : M.t (var * web * nat * list arg);
     r_tagof : M.t ctor_tag;
     r_cenv : term.ctor_env }.
 
@@ -448,29 +598,46 @@ Section Analysis.
   Definition tag_base : positive := Pos.succ (max_pos (map fst (M.elements cenv))).
   Definition ind_base : positive := Pos.succ (max_pos (map (fun p => term.ctor_ind_tag (snd p)) (M.elements cenv))).
 
-  (** Tags of the wrappers, lambda sets, and the table of code functions *)
-  Definition assign : M.t ctor_tag * WM.t (list ctor_tag) * M.t (var * web * nat) * positive :=
-    fold_left (fun '(tagof, L, T, c) '(f, w, xs, e) =>
-                 if is_bad w then (tagof, L, T, c)
+  (** Tags of the wrappers and lambda sets *)
+  Definition assign : M.t ctor_tag * WM.t (list ctor_tag) * positive :=
+    fold_left (fun '(tagof, L, c) '(f, w, xs, e) =>
+                 if is_bad w then (tagof, L, c)
                  else match tagof ! f, code_of xs e with
-                      | None, Some (code, wc, zs) =>
+                      | None, Some _ =>
                           (M.set f c tagof,
                            WM.set w (match WM.get w L with Some lams => lams ++ [c] | None => [c] end) L,
-                           M.set c (code, wc, length zs) T,
                            Pos.succ c)
-                      | _, _ => (tagof, L, T, c)
-                      end) inner_funs (M.empty _, WM.empty _, M.empty _, tag_base).
+                      | _, _ => (tagof, L, c)
+                      end) inner_funs (M.empty _, WM.empty _, tag_base).
+
+  Definition inner_bundles : list fundefs :=
+    concat (map bundles_of (fd_bodies Btop)) ++ bundles_of e0.
+
+  (** The table of code functions: once the tags are known, the environment
+      of every bundle and the extra arguments of its wrappers *)
+  Definition table (L : WM.t (list ctor_tag)) (tagof : M.t ctor_tag) : M.t (var * web * nat * list arg) :=
+    fold_left (fun T B =>
+                 let E := benv L tagof B in
+                 let rs := recs_with L tagof E B in
+                 fold_left (fun T '(f, w, xs, e) =>
+                              if sel_w L w then T
+                              else match wrapper_fields xs e, tagof ! f with
+                                   | Some (code, wc, zs), Some c =>
+                                       M.set c (code, wc, length E, map (mk_arg E rs) zs) T
+                                   | _, _ => T
+                                   end) (fd_list B) T) inner_bundles (M.empty _).
 
   (** One fresh inductive type per selected web *)
   Definition new_ctors : list (ctor_tag * term.ctor_ty_info) :=
-    let '(_, L, T, _) := assign in
+    let '(tagof, L, _) := assign in
+    let T := table L tagof in
     fst (fold_left (fun '(acc, it) '(w, lams) =>
                       (acc ++ map (fun '(i, c) =>
                                      (c, {| term.ctor_name := BasicAst.nAnon;
                                             term.ctor_ind_name := BasicAst.nAnon;
                                             term.ctor_ind_tag := it;
                                             term.ctor_arity := match T ! c with
-                                                               | Some (_, _, n) => N.of_nat n
+                                                               | Some (_, _, n, _) => N.of_nat n
                                                                | None => 0%N
                                                                end;
                                             term.ctor_ordinal := N.of_nat i |}))
@@ -478,8 +645,8 @@ Section Analysis.
                        Pos.succ it)) (WM_elements L) ([], ind_base)).
 
   Definition analyze_dfn : dfn_result :=
-    let '(tagof, L, T, _) := assign in
-    {| r_L := L; r_T := T; r_tagof := tagof;
+    let '(tagof, L, _) := assign in
+    {| r_L := L; r_T := table L tagof; r_tagof := tagof;
        r_cenv := fold_left (fun acc '(c, info) => M.set c info acc) new_ctors cenv |}.
 
 End Analysis.
@@ -487,7 +654,7 @@ End Analysis.
 Lemma r_cenv_eq cenv Btop e0 :
   r_cenv (analyze_dfn cenv Btop e0) =
   fold_left (fun acc '(c, info) => M.set c info acc) (new_ctors cenv Btop e0) cenv.
-Proof. unfold analyze_dfn. destruct (assign cenv Btop e0) as [[[? ?] ?] ?]. reflexivity. Qed.
+Proof. unfold analyze_dfn. destruct (assign cenv Btop e0) as [[? ?] ?]. reflexivity. Qed.
 
 (** ** Checks of the hypotheses of the correctness theorem *)
 
@@ -521,13 +688,13 @@ Proof.
   destruct (cenv ! c) as [i |]; [| discriminate ]. apply Pos.eqb_eq in H. eauto.
 Qed.
 
-Definition ht_check (Btop : fundefs) (T : M.t (var * web * nat)) : bool :=
-  forallb (fun '(c, (code, wc, n)) => in_code Btop code) (M.elements T).
+Definition ht_check (Btop : fundefs) (T : M.t (var * web * nat * list arg)) : bool :=
+  forallb (fun p => match snd p with (code, _, _, _) => in_code Btop code end) (M.elements T).
 
 Lemma ht_check_spec Btop T :
-  ht_check Btop T = true -> forall c code wc n, T ! c = Some (code, wc, n) -> Code Btop code.
+  ht_check Btop T = true -> forall c code wc n args, T ! c = Some (code, wc, n, args) -> Code Btop code.
 Proof.
-  intros H c code wc n HT. eapply M.elements_correct in HT.
+  intros H c code wc n args HT. eapply M.elements_correct in HT.
   eapply forallb_forall in H; [| exact HT ]. simpl in H. eapply in_code_true; eassumption.
 Qed.
 
@@ -587,7 +754,7 @@ Definition dfn_top (cenv : term.ctor_env) (e : exp) : term.ctor_env * exp :=
       let m := identifiers.max_var (erase e) 1%positive in
       let jw := Pos.succ (max_iweb e) in
       if forallb (sel_w L) (fd_webs Btop) && nodupb (bnames Btop) &&
-         dfn_ok_fd L T Btop tagof m dfn_thr [] Btop && dfn_ok L T Btop tagof m dfn_thr e0 &&
+         dfn_ok_fd L T Btop tagof m dfn_thr [] [] Btop && dfn_ok L T Btop tagof m dfn_thr e0 &&
          hl_check (r_cenv r) L && ht_check Btop T && ext_check cenv (new_ctors cenv Btop e0)
       then (r_cenv r, Efun (dfn_fd L T tagof m dfn_thr jw [] Btop) (dfn L T tagof m dfn_thr jw e0))
       else (cenv, e)
@@ -596,8 +763,8 @@ Definition dfn_top (cenv : term.ctor_env) (e : exp) : term.ctor_env * exp :=
 
 (** * Correctness *)
 
-Lemma recs_of_keep L tagof B :
-  forallb (sel_w L) (fd_webs B) = true -> recs_of L tagof B = [].
+Lemma recs_with_keep L tagof E B :
+  forallb (sel_w L) (fd_webs B) = true -> recs_with L tagof E B = [].
 Proof.
   induction B; simpl; intros H; eauto. apply andb_true_iff in H. destruct H as [H1 H2].
   rewrite H1. eauto.
@@ -658,9 +825,9 @@ Proof.
   { do 3 eexists. split; [ reflexivity | split; [ reflexivity |] ].
     split; [| split ].
     - match goal with
-      | [ Hk : forallb (sel_w _) (fd_webs f) = true, Hfd : dfn_ok_fd _ _ _ _ _ _ [] f = true |- _ ] =>
-          pose proof (proj2 (dfn_ok_trans _ _ _ _ _ _ jw) f [] Hfd) as Hb;
-          rewrite (recs_of_keep _ _ _ Hk) in Hb; exact Hb
+      | [ Hk : forallb (sel_w _) (fd_webs f) = true, Hfd : dfn_ok_fd _ _ _ _ _ _ [] [] f = true |- _ ] =>
+          pose proof (proj2 (dfn_ok_trans _ _ _ _ _ _ jw) f [] [] Hfd) as Hb;
+          rewrite (recs_with_keep _ _ _ _ Hk) in Hb; exact Hb
       end.
     - rewrite <- bnames_fnames. eapply nodupb_spec. eassumption.
     - eapply (proj1 (dfn_ok_trans _ _ _ _ _ _ jw)). eassumption. }

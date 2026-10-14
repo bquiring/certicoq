@@ -11,10 +11,14 @@
      let rec f xs = code_f (xs ++ zs)   (* web w, selected *)
 
    A selected web [w] has a lambda set [WM.get w L] of constructor tags; the
-   closure of a wrapper becomes a record [C_f(zs)] (the tag [C_f] is mapped
+   closure of a wrapper becomes a record [C_f(E)] (the tag [C_f] is mapped
    to [code_f] by [T]), and a call through [w] becomes a case analysis on the
    record over the lambda set, whose branches project the fields and call the
-   code function by name:
+   code function by name.  All the wrappers of a bundle share the fields [E]
+   (the environment of the bundle, without its wrappers): a wrapper that
+   captures a sibling (or itself) gets the sibling's record rebuilt from the
+   same fields at the call, so mutually recursive closures need no cyclic
+   records.  In the simple case of a single wrapper with no recursion:
 
      source                       target
      ------                       ------
@@ -85,14 +89,67 @@ Fixpoint projs (zs : list var) (w : web) (c : ctor_tag) (n : N) (g : var) (e : e
   | z :: zs => Eproj z w c n g (projs zs w c (N.succ n) g e)
   end.
 
-(** An alternative of a dispatch: the tag of a wrapper, its code function,
-    the web of the code function, and the variables receiving the fields. *)
-Definition alt : Type := (ctor_tag * var * web * list var)%type.
+(** The extra arguments of a code function, as seen from the record of a
+    wrapper.  All the wrappers of a bundle share the same fields (the
+    environment [E] of the bundle, which contains no wrapper of the bundle):
+    an argument is either a field of the environment, or the record of a
+    sibling wrapper (its web and tag), rebuilt from the same fields.  This is
+    how mutually recursive closures are represented without cyclic
+    records. *)
+Inductive arg : Type :=
+| AEnv : nat -> arg
+| ASib : web -> ctor_tag -> arg.
 
-Definition alt_tag (a : alt) : ctor_tag := let '(c, _, _, _) := a in c.
+Definition arg_internal (a : arg) : Prop :=
+  match a with AEnv _ => True | ASib w _ => exposedb w = false end.
+
+(** Rebuild the sibling records [ss] from the projected fields [zs] *)
+Fixpoint arg_binds (zs : list var) (args : list arg) (ss : list var) (e : exp) : exp :=
+  match args, ss with
+  | ASib w c :: args, s :: ss => Econstr s w c zs (arg_binds zs args ss e)
+  | AEnv _ :: args, _ :: ss => arg_binds zs args ss e
+  | _, _ => e
+  end.
+
+(** The variables holding the extra arguments *)
+Fixpoint arg_vars (zs : list var) (args : list arg) (ss : list var) : list var :=
+  match args, ss with
+  | AEnv i :: args, _ :: ss =>
+      match nth_error zs i with
+      | Some z => z :: arg_vars zs args ss
+      | None => arg_vars zs args ss
+      end
+  | ASib _ _ :: args, s :: ss => s :: arg_vars zs args ss
+  | _, _ => []
+  end.
+
+(** Their values, given the fields of the record *)
+Fixpoint arg_vals (vs : list val) (args : list arg) : option (list val) :=
+  match args with
+  | [] => Some []
+  | AEnv i :: args =>
+      match nth_error vs i, arg_vals vs args with
+      | Some v, Some avs => Some (v :: avs)
+      | _, _ => None
+      end
+  | ASib w c :: args =>
+      match arg_vals vs args with
+      | Some avs => Some (Vconstr w c vs :: avs)
+      | None => None
+      end
+  end.
+
+(** An alternative of a dispatch: the tag of a wrapper, its code function,
+    the web of the code function, the variables receiving the fields, the
+    extra arguments of the code function, and the variables receiving the
+    rebuilt sibling records (one per argument). *)
+Definition alt : Type := (ctor_tag * var * web * list var * list arg * list var)%type.
+
+Definition alt_tag (a : alt) : ctor_tag := let '(c, _, _, _, _, _) := a in c.
 
 Definition dispatch (g : var) (w : web) (alts : list alt) (call : var -> web -> list var -> exp) : exp :=
-  Ecase g w (map (fun '(c, code, wc, zs) => (c, projs zs w c 0 g (call code wc zs))) alts).
+  Ecase g w (map (fun '(c, code, wc, zs, args, ss) =>
+                    (c, projs zs w c 0 g (arg_binds zs args ss (call code wc (arg_vars zs args ss))))) alts).
 
 Fixpoint fnames (B : fundefs) : list var :=
   match B with
@@ -260,6 +317,96 @@ Section Defunc.
     intros. eapply (E_projs_r_gen V P ex k p1 w c g e2 Hpt zs [] vs); eauto.
   Qed.
 
+  (** ** Rebuilding the sibling records *)
+
+  Fixpoint arg_set (vs : list val) (args : list arg) (ss : list var) (rho : env) : env :=
+    match args, ss with
+    | ASib w c :: args, s :: ss => arg_set vs args ss (M.set s (Vconstr w c vs) rho)
+    | AEnv _ :: args, _ :: ss => arg_set vs args ss rho
+    | _, _ => rho
+    end.
+
+  Lemma arg_set_frame vs args : forall ss rho x, ~ List.In x ss -> M.get x (arg_set vs args ss rho) = M.get x rho.
+  Proof.
+    induction args as [| [i | w c] args IH]; intros [| s ss] rho x Hx; simpl; eauto.
+    - eapply IH. intros Hc; eapply Hx; now right.
+    - rewrite IH; [| intros Hc; eapply Hx; now right ].
+      rewrite M.gso; [ reflexivity | intros Hc; subst; eapply Hx; now left ].
+  Qed.
+
+  Lemma arg_set_wf vs args : forall ss rho,
+    wf_env rho -> Forall wf_val vs -> Forall arg_internal args -> wf_env (arg_set vs args ss rho).
+  Proof.
+    induction args as [| [i | w c] args IH]; intros [| s ss] rho Hwf Hvs Hint; simpl; eauto; inv Hint; eauto.
+    eapply IH; eauto. eapply wf_env_set; eauto. constructor; [ simpl in *; congruence | eassumption ].
+  Qed.
+
+  Lemma E_arg_binds_r (V : nat -> val -> val -> Prop) P ex k p1 zs vs e2
+        (Hpt : post_target_steps P) :
+    forall args ss rho2,
+      get_list zs rho2 = Some vs ->
+      Disjoint _ (FromList ss) (FromList zs) ->
+      Forall arg_internal args ->
+      E' cenv V P ex k p1 (e2, arg_set vs args ss rho2) ->
+      E' cenv V P ex k p1 (arg_binds zs args ss e2, rho2).
+  Proof.
+    induction args as [| [i | w c] args IH]; intros [| s ss] rho2 Hg Hd Hint HE; simpl in *; eauto; inv Hint.
+    - eapply IH; eauto. eapply Disjoint_Included_l; [| eassumption ]. intros z Hz; now right.
+    - eapply E_target_step; [ eassumption | |].
+      + intros. eapply wrap_constr; eauto. simpl in *. congruence.
+      + eapply IH; [| | eassumption | eassumption ].
+        * rewrite get_list_set_neq; [ eassumption |]. intros Hc. eapply Hd. constructor; [ now left | eassumption ].
+        * eapply Disjoint_Included_l; [| eassumption ]. intros z Hz; now right.
+  Qed.
+
+  Lemma set_lists_nth_error (zs : list var) (vs : list val) (rho rho' : env) :
+    NoDup zs -> set_lists zs vs rho = Some rho' ->
+    forall i z, nth_error zs i = Some z -> M.get z rho' = nth_error vs i.
+  Proof.
+    revert vs rho'. induction zs as [| z0 zs IH]; intros vs rho' Hnd Hs i z Hz; [ destruct i; inv Hz |].
+    destruct vs as [| v vs]; simpl in Hs; [ congruence |].
+    destruct (set_lists zs vs rho) as [rho'' |] eqn:Hs'; [| congruence ]. inv Hs. inv Hnd.
+    destruct i as [| i]; simpl in *.
+    - inv Hz. rewrite M.gss. reflexivity.
+    - rewrite M.gso; [ eapply IH; eauto |]. intros Hc; subst. eapply H1. eapply nth_error_In; eassumption.
+  Qed.
+
+  Lemma get_list_arg_vars (zs : list var) (vs : list val) (args : list arg) :
+    forall ss rho avs,
+      NoDup ss -> Disjoint _ (FromList ss) (FromList zs) -> length ss = length args ->
+      length zs = length vs ->
+      (forall i z, nth_error zs i = Some z -> M.get z rho = nth_error vs i) ->
+      arg_vals vs args = Some avs ->
+      get_list (arg_vars zs args ss) (arg_set vs args ss rho) = Some avs.
+  Proof.
+    induction args as [| [i | w c] args IH]; intros [| s ss] rho avs Hnd Hd Hlen Hlz Henv Hav;
+      simpl in *; try congruence.
+    - inv Hnd. destruct (nth_error vs i) as [v |] eqn:Hv; [| congruence ].
+      destruct (arg_vals vs args) as [avs' |] eqn:Hav'; [| congruence ]. inv Hav.
+      assert (Hi : i < length zs) by (rewrite Hlz; eapply nth_error_Some; congruence).
+      destruct (nth_error zs i) as [z0 |] eqn:Hz; [| exfalso; eapply nth_error_Some; eassumption ].
+      simpl. rewrite arg_set_frame.
+      + rewrite (Henv _ _ Hz), Hv. erewrite IH; eauto.
+        eapply Disjoint_Included_l; [| eassumption ]. intros z Hz'; now right.
+      + intros Hc. eapply Hd. constructor; [ now right | eapply nth_error_In; eassumption ].
+    - inv Hnd. destruct (arg_vals vs args) as [avs' |] eqn:Hav'; [| congruence ]. inv Hav.
+      rewrite arg_set_frame; [| eassumption ]. rewrite M.gss. erewrite IH; eauto.
+      + eapply Disjoint_Included_l; [| eassumption ]. intros z Hz'; now right.
+      + intros i' z Hz. rewrite M.gso; [ eauto |]. intros Hc; subst.
+        eapply Hd. constructor; [ now left | eapply nth_error_In; eassumption ].
+  Qed.
+
+  Lemma arg_vars_incl zs args ss z : List.In z (arg_vars zs args ss) -> List.In z zs \/ List.In z ss.
+  Proof.
+    revert ss. induction args as [| [i | w c] args IH]; intros [| s ss] Hz; simpl in *; try contradiction.
+    - destruct (nth_error zs i) as [z' |] eqn:Hz'; [ destruct Hz as [Hz | Hz] |].
+      + subst. left. eapply nth_error_In. eassumption.
+      + destruct (IH ss Hz); [ now left | right; now right ].
+      + destruct (IH ss Hz); [ now left | right; now right ].
+    - destruct Hz as [Hz | Hz]; [ subst; right; now left |].
+      destruct (IH ss Hz); [ now left | right; now right ].
+  Qed.
+
   (** ** Records *)
 
   (** The environment after building records *)
@@ -384,16 +531,27 @@ End Defunc.
 Section Spec.
 
   Variable (L : WM.t (list ctor_tag)).     (* lambda sets of the selected webs *)
-  Variable (T : M.t (var * web * nat)).   (* tag -> code function, its web, number of fields *)
+  (* tag -> code function, its web, number of fields, extra arguments *)
+  Variable (T : M.t (var * web * nat * list arg)).
   Variable (Btop : fundefs).              (* the lifted code functions *)
 
   Definition Code : Ensemble var := name_in_fundefs Btop.
 
   Definition alts_ok (w : web) (alts : list alt) (avoid : Ensemble var) : Prop :=
     WM.get w L = Some (map alt_tag alts) /\
-    Forall (fun a => let '(c, code, wc, zs) := a in
-                     T ! c = Some (code, wc, length zs) /\ NoDup zs /\
-                     Disjoint _ (FromList zs) (avoid :|: Code)) alts.
+    Forall (fun a => let '(c, code, wc, zs, args, ss) := a in
+                     T ! c = Some (code, wc, length zs, args) /\ NoDup (zs ++ ss) /\
+                     length ss = length args /\ Forall arg_internal args /\
+                     Disjoint _ (FromList (zs ++ ss)) (avoid :|: Code)) alts.
+
+  (** An extra argument of a wrapper: a field of the environment [E] of the
+      bundle, or a sibling wrapper (its record in [rs0], with the same
+      fields). *)
+  Definition arg_ok (E : list var) (rs0 : list rec) (a : arg) (z : var) : Prop :=
+    match a with
+    | AEnv i => nth_error E i = Some z
+    | ASib w c => List.In (z, w, c, E) rs0
+    end.
 
   Inductive trans : exp -> exp -> Prop :=
   | Trans_constr :
@@ -440,34 +598,37 @@ Section Spec.
         alts_ok w alts (f |: FromList ys) ->
         trans (Eapp f w ys) (dispatch f w alts (fun code wc zs => Eapp code wc (ys ++ zs)))
   | Trans_fun :
-      forall B Bk rs e e',
-        trans_bundle rs B Bk rs ->
+      forall E B Bk rs e e',
+        trans_bundle E rs B Bk rs ->
         NoDup (fnames B) ->
         Disjoint _ (name_in_fundefs B) Code ->
         Disjoint _ (FromList (rec_fields rs)) (FromList (rec_names rs)) ->
+        FromList E \subset occurs_free_fundefs B :|: name_in_fundefs B ->
         trans e e' ->
         trans (Efun B e) (fun_recs Bk rs e')
   | Trans_prim_val : forall x p e, trans (Eprim_val x p e) (Eprim_val x p e)
   | Trans_prim : forall x p ys e, trans (Eprim x p ys e) (Eprim x p ys e)
   | Trans_halt : forall x, trans (Ehalt x) (Ehalt x)
-  (* [trans_bundle rs0 B Bk rs]: the functions [B] (a suffix of the bundle,
-     whose records are [rs0]) become the functions [Bk] and the records [rs] *)
-  with trans_bundle : list rec -> fundefs -> fundefs -> list rec -> Prop :=
-  | TB_nil : forall rs0, trans_bundle rs0 Fnil Fnil []
+  (* [trans_bundle E rs0 B Bk rs]: the functions [B] (a suffix of the bundle,
+     whose records are [rs0], all with fields [E]) become the functions [Bk]
+     and the records [rs] *)
+  with trans_bundle : list var -> list rec -> fundefs -> fundefs -> list rec -> Prop :=
+  | TB_nil : forall E rs0, trans_bundle E rs0 Fnil Fnil []
   | TB_keep :
-      forall rs0 f w xs e e' B Bk rs,
+      forall E rs0 f w xs e e' B Bk rs,
         keeps (sel_L L) w = true ->
         Disjoint _ (FromList xs) (Code :|: FromList (rec_fields rs0) :|: FromList (rec_names rs0)) ->
-        trans e e' -> trans_bundle rs0 B Bk rs ->
-        trans_bundle rs0 (Fcons f w xs e B) (Fcons f w xs (bind_recs rs0 e') Bk) rs
+        trans e e' -> trans_bundle E rs0 B Bk rs ->
+        trans_bundle E rs0 (Fcons f w xs e B) (Fcons f w xs (bind_recs rs0 e') Bk) rs
   | TB_sel :
-      forall rs0 f w xs zs B Bk rs lams c code wc,
+      forall E rs0 f w xs zs B Bk rs lams c code wc args,
         exposedb w = false -> WM.get w L = Some lams -> List.In c lams ->
-        T ! c = Some (code, wc, length zs) -> Code code ->
+        T ! c = Some (code, wc, length E, args) -> Code code ->
         exposedb wc = false -> WM.get wc L = None ->
         NoDup xs -> Disjoint _ (FromList xs) (FromList zs) -> ~ List.In code xs ->
-        trans_bundle rs0 B Bk rs ->
-        trans_bundle rs0 (Fcons f w xs (Eapp code wc (xs ++ zs)) B) Bk ((f, w, c, zs) :: rs).
+        Forall2 (arg_ok E rs0) args zs ->
+        trans_bundle E rs0 B Bk rs ->
+        trans_bundle E rs0 (Fcons f w xs (Eapp code wc (xs ++ zs)) B) Bk ((f, w, c, E) :: rs).
 
   Scheme trans_mut := Induction for trans Sort Prop
   with trans_bundle_mut := Induction for trans_bundle Sort Prop.
@@ -477,7 +638,7 @@ Section Spec.
   Definition trans_top (e : exp) (e_t : exp) : Prop :=
     exists e0 Btop' e0',
       e = Efun Btop e0 /\ e_t = Efun Btop' e0' /\
-      trans_bundle [] Btop Btop' [] /\ NoDup (fnames Btop) /\ trans e0 e0'.
+      trans_bundle [] [] Btop Btop' [] /\ NoDup (fnames Btop) /\ trans e0 e0'.
 
 End Spec.
 
@@ -485,7 +646,7 @@ End Spec.
 
 Section SpecFacts.
 
-  Variables (L : WM.t (list ctor_tag)) (T : M.t (var * web * nat)) (Btop : fundefs).
+  Variables (L : WM.t (list ctor_tag)) (T : M.t (var * web * nat * list arg)) (Btop : fundefs).
 
   Local Notation Code := (Code Btop).
   Local Notation trans := (trans L T Btop).
@@ -499,17 +660,18 @@ Section SpecFacts.
 
   Lemma find_alt (g : var) (w : web) (alts : list alt) call c :
     List.In c (map alt_tag alts) ->
-    exists code wc zs n,
-      List.In (c, code, wc, zs) alts /\
-      find_tag_nth (map (fun '(c, code, wc, zs) => (c, projs zs w c 0 g (call code wc zs))) alts)
-                   c (projs zs w c 0 g (call code wc zs)) n.
+    exists code wc zs args ss n,
+      List.In (c, code, wc, zs, args, ss) alts /\
+      find_tag_nth (map (fun '(c, code, wc, zs, args, ss) =>
+                           (c, projs zs w c 0 g (arg_binds zs args ss (call code wc (arg_vars zs args ss))))) alts)
+                   c (projs zs w c 0 g (arg_binds zs args ss (call code wc (arg_vars zs args ss)))) n.
   Proof.
-    induction alts as [| [[[c' code] wc] zs] alts IH]; simpl; intros Hin; [ contradiction |].
+    induction alts as [| [[[[[c' code] wc] zs] args] ss] alts IH]; simpl; intros Hin; [ contradiction |].
     destruct (M.elt_eq c' c); subst.
-    - do 4 eexists. split; [ now left | constructor ].
+    - do 6 eexists. split; [ now left | constructor ].
     - destruct Hin as [Heq | Hin]; [ congruence |].
-      edestruct IH as (code'' & wc'' & zs'' & n' & Hin' & Hft); eauto.
-      do 4 eexists. split; [ now right; eauto | econstructor; eauto ].
+      edestruct IH as (code'' & wc'' & zs'' & args'' & ss'' & n' & Hin' & Hft); eauto.
+      do 6 eexists. split; [ now right; eauto | econstructor; eauto ].
   Qed.
 
   Lemma name_in_fnames B x : name_in_fundefs B x <-> List.In x (fnames B).
@@ -540,8 +702,8 @@ Section SpecFacts.
     destruct (M.elt_eq f g); subst; eauto. destruct H; [ congruence | eauto ].
   Qed.
 
-  Lemma trans_bundle_names rs0 B Bk rs :
-    trans_bundle rs0 B Bk rs ->
+  Lemma trans_bundle_names E rs0 B Bk rs :
+    trans_bundle E rs0 B Bk rs ->
     forall f, name_in_fundefs B f <-> name_in_fundefs Bk f \/ List.In f (rec_names rs).
   Proof.
     intros H; induction H; intros g; simpl.
@@ -563,36 +725,36 @@ Section SpecFacts.
         * right. apply IHtrans_bundle. now right.
   Qed.
 
-  Lemma trans_bundle_internal rs0 B Bk rs : trans_bundle rs0 B Bk rs -> recs_internal rs.
+  Lemma trans_bundle_internal E rs0 B Bk rs : trans_bundle E rs0 B Bk rs -> recs_internal rs.
   Proof. unfold recs_internal. intros H; induction H; eauto. Qed.
 
-  Lemma trans_bundle_nodup rs0 B Bk rs :
-    trans_bundle rs0 B Bk rs -> NoDup (fnames B) ->
+  Lemma trans_bundle_nodup E rs0 B Bk rs :
+    trans_bundle E rs0 B Bk rs -> NoDup (fnames B) ->
     NoDup (rec_names rs) /\ Disjoint _ (name_in_fundefs Bk) (FromList (rec_names rs)).
   Proof.
     intros H.
-    induction H as [rs0 | rs0 f w xs e e' B Bk rs Hk Hd0 Ht Hb IH
-                   | rs0 f w xs zs B Bk rs lams c code wc Hw HL Hc HT HC Hwc HLwc Hnd0 Hdz Hcx Hb IH];
+    induction H as [E rs0 | E rs0 f w xs e e' B Bk rs Hk Hd0 Ht Hb IH
+                   | E rs0 f w xs zs B Bk rs lams c code wc args Hw HL Hc HT HC Hwc HLwc Hnd0 Hdz Hcx Hargs Hb IH];
       simpl; intros Hnd.
     - split; [ constructor |]. constructor. intros z Hz. destruct Hz as [z Ha Ha']. inv Ha'.
     - inversion Hnd as [| f' l Hnin Hnd' Heq]; subst.
       destruct (IH Hnd') as [Hn Hd]. split; [ exact Hn |].
       constructor. intros z Hz. destruct Hz as [z Ha Ha']. destruct Ha as [z Ha | z Ha].
       + inv Ha. eapply Hnin. eapply name_in_fnames.
-        eapply (proj2 (trans_bundle_names _ _ _ _ Hb z)). right. exact Ha'.
+        eapply (proj2 (trans_bundle_names _ _ _ _ _ Hb z)). right. exact Ha'.
       + eapply Hd. constructor; eassumption.
     - inversion Hnd as [| f' l Hnin Hnd' Heq]; subst.
       destruct (IH Hnd') as [Hn Hd]. split.
       + constructor; [| exact Hn ]. intros Hcf. eapply Hnin. eapply name_in_fnames.
-        eapply (proj2 (trans_bundle_names _ _ _ _ Hb f)). now right.
+        eapply (proj2 (trans_bundle_names _ _ _ _ _ Hb f)). now right.
       + constructor. intros z Hz. destruct Hz as [z Ha Ha']. destruct Ha' as [Heq | Hin].
         * subst. eapply Hnin. eapply name_in_fnames.
-          eapply (proj2 (trans_bundle_names _ _ _ _ Hb z)). now left.
+          eapply (proj2 (trans_bundle_names _ _ _ _ _ Hb z)). now left.
         * eapply Hd. constructor; eassumption.
   Qed.
 
-  Lemma trans_bundle_keep rs0 B Bk rs f w xs e2 :
-    trans_bundle rs0 B Bk rs -> NoDup (fnames B) ->
+  Lemma trans_bundle_keep E rs0 B Bk rs f w xs e2 :
+    trans_bundle E rs0 B Bk rs -> NoDup (fnames B) ->
     find_def f Bk = Some (w, xs, e2) ->
     exists e e',
       find_def f B = Some (w, xs, e) /\ e2 = bind_recs rs0 e' /\ trans e e' /\
@@ -600,43 +762,69 @@ Section SpecFacts.
       Disjoint _ (FromList xs) (Code :|: FromList (rec_fields rs0) :|: FromList (rec_names rs0)).
   Proof.
     intros H.
-    induction H as [rs0 | rs0 g w' xs' e e' B Bk rs Hk Hd0 Ht Hb IH
-                   | rs0 g w' xs' zs B Bk rs lams c code wc Hw HL Hc HT HC Hwc HLwc Hnd0 Hdz Hcx Hb IH];
+    induction H as [E rs0 | E rs0 g w' xs' e e' B Bk rs Hk Hd0 Ht Hb IH
+                   | E rs0 g w' xs' zs B Bk rs lams c code wc args Hw HL Hc HT HC Hwc HLwc Hnd0 Hdz Hcx Hargs Hb IH];
       simpl; intros Hnd Hf; try congruence;
       inversion Hnd as [| f' l Hnin Hnd' Heq]; subst.
     - destruct (M.elt_eq f g); subst; eauto.
       inv Hf. do 2 eexists. eauto 10.
     - destruct (M.elt_eq f g); subst; eauto.
       exfalso. eapply Hnin. eapply name_in_fnames.
-      eapply (proj2 (trans_bundle_names _ _ _ _ Hb g)). left.
+      eapply (proj2 (trans_bundle_names _ _ _ _ _ Hb g)). left.
       eapply find_def_name_in_fundefs; eauto.
   Qed.
 
-  Lemma trans_bundle_sel rs0 B Bk rs f w c zs :
-    trans_bundle rs0 B Bk rs -> NoDup (fnames B) ->
+  Lemma trans_bundle_sel E rs0 B Bk rs f w c zs :
+    trans_bundle E rs0 B Bk rs -> NoDup (fnames B) ->
     rec_of rs f = Some (w, c, zs) ->
-    exists xs lams code wc,
-      find_def f B = Some (w, xs, Eapp code wc (xs ++ zs)) /\
+    zs = E /\
+    exists xs ys lams code wc args,
+      find_def f B = Some (w, xs, Eapp code wc (xs ++ ys)) /\
       exposedb w = false /\ WM.get w L = Some lams /\ List.In c lams /\
-      T ! c = Some (code, wc, length zs) /\ Code code /\
+      T ! c = Some (code, wc, length E, args) /\ Code code /\
       exposedb wc = false /\ WM.get wc L = None /\
-      NoDup xs /\ Disjoint _ (FromList xs) (FromList zs) /\ ~ List.In code xs.
+      NoDup xs /\ Disjoint _ (FromList xs) (FromList ys) /\ ~ List.In code xs /\
+      Forall2 (arg_ok E rs0) args ys.
   Proof.
     intros H.
-    induction H as [rs0 | rs0 g w' xs' e e' B Bk rs Hk Hd0 Ht Hb IH
-                   | rs0 g w' xs' zs' B Bk rs lams c' code wc Hw HL Hc HT HC Hwc HLwc Hnd0 Hdz Hcx Hb IH];
+    induction H as [E rs0 | E rs0 g w' xs' e e' B Bk rs Hk Hd0 Ht Hb IH
+                   | E rs0 g w' xs' zs' B Bk rs lams c' code wc args Hw HL Hc HT HC Hwc HLwc Hnd0 Hdz Hcx Hargs Hb IH];
       simpl; intros Hnd Hf; try congruence;
       inversion Hnd as [| f' l Hnin Hnd' Heq]; subst.
     - destruct (M.elt_eq f g); subst; eauto.
       exfalso. eapply Hnin. eapply name_in_fnames.
-      eapply (proj2 (trans_bundle_names _ _ _ _ Hb g)). right. eapply rec_of_In; eauto.
+      eapply (proj2 (trans_bundle_names _ _ _ _ _ Hb g)). right. eapply rec_of_In; eauto.
     - destruct (M.elt_eq f g); subst; eauto.
-      inv Hf. do 4 eexists. eauto 20.
+      inv Hf. split; [ reflexivity |]. do 6 eexists. eauto 20.
   Qed.
 
-  Lemma trans_bundle_names_sub rs0 B Bk rs f :
-    trans_bundle rs0 B Bk rs -> name_in_fundefs Bk f -> name_in_fundefs B f.
-  Proof. intros H Hf. eapply (proj2 (trans_bundle_names _ _ _ _ H f)). now left. Qed.
+  Lemma trans_bundle_fields E rs0 B Bk rs f w c zs :
+    trans_bundle E rs0 B Bk rs -> List.In (f, w, c, zs) rs -> zs = E.
+  Proof.
+    intros H. induction H; simpl; intros Hin; try contradiction; eauto.
+    destruct Hin as [Hin | Hin]; [ inv Hin; reflexivity | eauto ].
+  Qed.
+
+  Lemma rec_fields_E E rs0 B Bk rs z :
+    trans_bundle E rs0 B Bk rs -> List.In z (rec_fields rs) -> List.In z E.
+  Proof.
+    intros H. induction H; simpl; intros Hin; try contradiction; eauto.
+    unfold rec_fields in Hin. simpl in Hin. eapply in_app_or in Hin. destruct Hin; eauto.
+  Qed.
+
+  Lemma trans_bundle_names_sub E rs0 B Bk rs f :
+    trans_bundle E rs0 B Bk rs -> name_in_fundefs Bk f -> name_in_fundefs B f.
+  Proof. intros H Hf. eapply (proj2 (trans_bundle_names _ _ _ _ _ H f)). now left. Qed.
+
+  Lemma In_rec_of rs f w c zs :
+    NoDup (rec_names rs) -> List.In (f, w, c, zs) rs -> rec_of rs f = Some (w, c, zs).
+  Proof.
+    induction rs as [| [[[g w'] c'] zs'] rs IH]; simpl; intros Hnd Hin; [ contradiction |]. inv Hnd.
+    destruct (M.elt_eq f g); subst.
+    - destruct Hin as [Hin | Hin]; [ inv Hin; reflexivity |].
+      exfalso. eapply H1. eapply in_map_iff. exists (g, w, c, zs). eauto.
+    - destruct Hin as [Hin | Hin]; [ inv Hin; congruence | eauto ].
+  Qed.
 
 End SpecFacts.
 
@@ -652,7 +840,7 @@ Section DefuncRel.
   Local Notation PostGT := (@exposed.PostGT fuel trace).
   Local Notation VTransT := (@exposed.VTransT fuel trace).
 
-  Variables (L : WM.t (list ctor_tag)) (T : M.t (var * web * nat)) (Btop Btop' : fundefs).
+  Variables (L : WM.t (list ctor_tag)) (T : M.t (var * web * nat * list arg)) (Btop Btop' : fundefs).
 
   Local Notation Code := (Code Btop).
   Local Notation trans := (trans L T Btop).
@@ -667,20 +855,22 @@ Section DefuncRel.
 
   (** The closure of a wrapper is related to its record: the code function
       it calls is related to the target code function of the record's tag,
-      and its free variables to the fields.  [rtop] is the environment of
-      the target code functions. *)
+      and its extra arguments to the values rebuilt from the fields of the
+      record (a field, or the record of a sibling wrapper with the same
+      fields).  [rtop] is the environment of the target code functions. *)
   Definition VT_dfn (rtop : env) : VTransT :=
     fun PG V' k v1 v2 =>
       match v1, v2 with
       | Vfun rho1 B1 f1, Vconstr w c vs2 =>
-          exists xs zs lams code wc vcode vzs,
-            find_def f1 B1 = Some (w, xs, Eapp code wc (xs ++ zs)) /\
-            WM.get w L = Some lams /\ List.In c lams /\ T ! c = Some (code, wc, length zs) /\
+          exists xs ys lams code wc args vcode vys avs,
+            find_def f1 B1 = Some (w, xs, Eapp code wc (xs ++ ys)) /\
+            WM.get w L = Some lams /\ List.In c lams /\ T ! c = Some (code, wc, length vs2, args) /\
             exposedb wc = false /\ WM.get wc L = None /\
-            NoDup xs /\ Disjoint _ (FromList xs) (FromList zs) /\ ~ List.In code xs /\
+            NoDup xs /\ Disjoint _ (FromList xs) (FromList ys) /\ ~ List.In code xs /\
             M.get code (def_funs B1 B1 rho1 rho1) = Some vcode /\
-            get_list zs (def_funs B1 B1 rho1 rho1) = Some vzs /\
-            (forall j, j < k -> V' j vcode (Vfun rtop Btop' code) /\ Forall2 (V' j) vzs vs2)
+            get_list ys (def_funs B1 B1 rho1 rho1) = Some vys /\
+            arg_vals vs2 args = Some avs /\
+            (forall j, j < k -> V' j vcode (Vfun rtop Btop' code) /\ Forall2 (V' j) vys avs)
       | _, _ => False
       end.
 
@@ -688,15 +878,15 @@ Section DefuncRel.
   Proof.
     constructor; unfold VT_dfn.
     - intros PG V1 V2 k v1 v2 Hext. destruct v1, v2; try easy.
-      intros (xs & zs & lams & code & wc & vcode & vzs & H1 & H2 & H3 & H4 & H5 & H6 & H7 & H8 & H9 & H10 & H11 & H12).
-      exists xs, zs, lams, code, wc, vcode, vzs. repeat (split; [ eassumption |]).
-      intros j Hj. destruct (H12 j Hj) as [Hc Hz]. split.
+      intros (xs & ys & lams & code & wc & args & vcode & vys & avs & H1 & H2 & H3 & H4 & H5 & H6 & H7 & H8 & H9 & H10 & H11 & H12 & H13).
+      exists xs, ys, lams, code, wc, args, vcode, vys, avs. repeat (split; [ eassumption |]).
+      intros j Hj. destruct (H13 j Hj) as [Hc Hz]. split.
       + eapply Hext; eauto.
       + eapply Forall2_monotonic; [| eassumption ]. intros. eapply Hext; eauto.
     - intros PG V k j v1 v2 Hmono. destruct v1, v2; try easy.
-      intros (xs & zs & lams & code & wc & vcode & vzs & H1 & H2 & H3 & H4 & H5 & H6 & H7 & H8 & H9 & H10 & H11 & H12) Hle.
-      exists xs, zs, lams, code, wc, vcode, vzs. repeat (split; [ eassumption |]).
-      intros i Hi. eapply H12. lia.
+      intros (xs & ys & lams & code & wc & args & vcode & vys & avs & H1 & H2 & H3 & H4 & H5 & H6 & H7 & H8 & H9 & H10 & H11 & H12 & H13) Hle.
+      exists xs, ys, lams, code, wc, args, vcode, vys, avs. repeat (split; [ eassumption |]).
+      intros i Hi. eapply H13. lia.
   Qed.
 
   Lemma caseConsistent_lams lams c (cl : list (ctor_tag * term.exp)) :
@@ -714,16 +904,17 @@ Section DefuncRel.
   Lemma dispatch_cc w alts g call c :
     WM.get w L = Some (map alt_tag alts) -> List.In c (map alt_tag alts) ->
     term_util.caseConsistent cenv
-      (erase_branches (map (fun '(c, code, wc, zs) => (c, projs zs w c 0 g (call code wc zs))) alts)) c.
+      (erase_branches (map (fun '(c, code, wc, zs, args, ss) =>
+                              (c, projs zs w c 0 g (arg_binds zs args ss (call code wc (arg_vars zs args ss))))) alts)) c.
   Proof.
     intros HLw Hin. eapply caseConsistent_lams; eauto.
-    clear. induction alts as [| [[[c code] wc] zs] alts IH]; simpl; constructor.
+    clear. induction alts as [| [[[[[c code] wc] zs] args] ss] alts IH]; simpl; constructor.
     - simpl. now left.
     - eapply Forall_impl; [| exact IH ]. intros p Hp. now right.
   Qed.
 
   (** The code functions of the tags are defined at the top *)
-  Hypothesis HT : forall c code wc n, T ! c = Some (code, wc, n) -> Code code.
+  Hypothesis HT : forall c code wc n args, T ! c = Some (code, wc, n, args) -> Code code.
 
   Lemma sel_L_None w : WM.get w L = None -> sel w = false.
   Proof. unfold sel_L. intros H; rewrite H; reflexivity. Qed.
@@ -760,34 +951,35 @@ Section DefuncRel.
     Lemma V_rec_inv k rhoc B h w c vs2 xs e :
       V k (Vfun rhoc B h) (Vconstr w c vs2) ->
       find_def h B = Some (w, xs, e) -> exposedb w = false -> sel w = true ->
-      exists zs lams code wc vcode vzs,
-        e = Eapp code wc (xs ++ zs) /\
-        WM.get w L = Some lams /\ List.In c lams /\ T ! c = Some (code, wc, length zs) /\
+      exists ys lams code wc args vcode vys avs,
+        e = Eapp code wc (xs ++ ys) /\
+        WM.get w L = Some lams /\ List.In c lams /\ T ! c = Some (code, wc, length vs2, args) /\
         exposedb wc = false /\ WM.get wc L = None /\
-        NoDup xs /\ Disjoint _ (FromList xs) (FromList zs) /\ ~ List.In code xs /\
+        NoDup xs /\ Disjoint _ (FromList xs) (FromList ys) /\ ~ List.In code xs /\
         M.get code (def_funs B B rhoc rhoc) = Some vcode /\
-        get_list zs (def_funs B B rhoc rhoc) = Some vzs /\
-        (forall j, j < k -> V j vcode (Vfun rtop Btop' code) /\ Forall2 (V j) vzs vs2).
+        get_list ys (def_funs B B rhoc rhoc) = Some vys /\
+        arg_vals vs2 args = Some avs /\
+        (forall j, j < k -> V j vcode (Vfun rtop Btop' code) /\ Forall2 (V j) vys avs).
     Proof.
       intros Hv Hfd Hw Hs.
       eapply (V_sel_internal cenv sel (VT_dfn rtop) P_ge) in Hv; [| eassumption | eassumption | eassumption ].
-      destruct Hv as (xs' & zs & lams & code & wc & vcode & vzs & Hfd' & H2 & H3 & H4 & H5 & H6 & H7 & H8 & H9 & H10 & H11 & H12).
-      rewrite Hfd in Hfd'. inv Hfd'. exists zs, lams, code, wc, vcode, vzs. eauto 20.
+      destruct Hv as (xs' & ys & lams & code & wc & args & vcode & vys & avs & Hfd' & H2 & H3 & H4 & H5 & H6 & H7 & H8 & H9 & H10 & H11 & H12 & H13).
+      rewrite Hfd in Hfd'. inv Hfd'. exists ys, lams, code, wc, args, vcode, vys, avs. eauto 20.
     Qed.
 
     (** ** Calls through a selected web, once the record is decoded *)
 
-    Lemma E_app_core ex k rho1 rhop f w ys c vs2 code wc zs' :
+    Lemma E_app_core ex k rho1 rhop f w ys c vs2 code wc args avs zs' :
       exposedb w = false -> sel w = true ->
       (forall rhoc B h, M.get f rho1 = Some (Vfun rhoc B h) -> fun_web B h = Some w ->
                         V k (Vfun rhoc B h) (Vconstr w c vs2)) ->
-      T ! c = Some (code, wc, length zs') ->
+      T ! c = Some (code, wc, length vs2, args) -> arg_vals vs2 args = Some avs ->
       M.get code rhop = Some (Vfun rtop Btop' code) ->
-      get_list zs' rhop = Some vs2 ->
+      get_list zs' rhop = Some avs ->
       Forall2 (var_rel k rho1 rhop) ys ys ->
       E P_sh ex k (Eapp f w ys, rho1) (Eapp code wc (ys ++ zs'), rhop).
     Proof.
-      intros Hw Hsel Hv HTc Hcode Hzs Hys r1 cin cout Hleq Hs. inv Hs.
+      intros Hw Hsel Hv HTc Hav Hcode Hzs Hys r1 cin cout Hleq Hs. inv Hs.
       - exists OOT, cin, <0>. split; [ constructor; eapply lt_one_w; eassumption |].
         split; [ simpl; eapply ge_plus_r | exact I ].
       - match goal with [ Hx : ex = true -> exposed_res r1 |- _ ] => rename Hx into Hexr end.
@@ -799,10 +991,11 @@ Section DefuncRel.
             rename Hg into Hf1; rename Hfd into Hfd1; rename Hgl into Hgl1; rename Hset into Hset1;
             rename Hb into Hbody1
         end.
-        edestruct (V_rec_inv k) as (zs & lams & code' & wc' & vcode & vzs & Heb & HLw & Hinc & HTc' &
-                                    Hwc & HLwc & Hndx & Hdxz & Hcx & Hgc & Hgz & Hrel);
+        edestruct (V_rec_inv k) as (zs & lams & code' & wc' & args' & vcode & vzs & avs' & Heb & HLw & Hinc & HTc' &
+                                    Hwc & HLwc & Hndx & Hdxz & Hcx & Hgc & Hgz & Hav' & Hrel);
           [ eapply Hv; [ eassumption | unfold fun_web; rewrite Hfd1; reflexivity ] | eassumption | eassumption | eassumption |].
-        subst. rewrite HTc in HTc'. injection HTc' as Hc1 Hc2 Hlz. subst code' wc'.
+        subst. assert (Heqs : code' = code /\ wc' = wc /\ args' = args) by (rewrite HTc in HTc'; inv HTc'; auto).
+          destruct Heqs as (-> & -> & ->). rewrite Hav in Hav'. injection Hav' as Heqa. subst avs'.
         rewrite Hw in Hbody1. inv Hbody1.
         + (* the wrapper runs out of fuel *)
           exists OOT, cin0, <0>. split; [ constructor; eapply lt_one_w; eassumption |].
@@ -827,7 +1020,7 @@ Section DefuncRel.
           destruct (Hrel (k - 1) ltac:(lia)) as [Hvc Hvz].
           eapply (V_keeps_fun cenv sel (VT_dfn rtop) P_ge) in Hvc;
             [| unfold fun_web; rewrite Hfd2; reflexivity | eapply keeps_unsel; eassumption ].
-          edestruct (Hvc (vs ++ vzs) (args2 ++ vs2) (k - 2)) as (xs2 & e2 & rho2' & Hfd3 & Hset3 & Hbody);
+          edestruct (Hvc (vs ++ vzs) (args2 ++ avs) (k - 2)) as (xs2 & e2 & rho2' & Hfd3 & Hset3 & Hbody);
             [ rewrite !length_app; f_equal; [ eapply Forall2_length; eassumption | eapply Forall2_length; eassumption ]
             | eassumption | symmetry; eassumption |].
           edestruct Hbody as (r2 & cin2 & cout2 & Hst2 & Hpost & HR);
@@ -855,18 +1048,18 @@ Section DefuncRel.
       - rewrite !plus_assoc. f_equal. apply plus_comm.
     Qed.
 
-    Lemma E_letapp_core ex k rho1 rhop x f w ys e e' c vs2 code wc zs' :
+    Lemma E_letapp_core ex k rho1 rhop x f w ys e e' c vs2 code wc args avs zs' :
       exposedb w = false -> sel w = true ->
       (forall rhoc B h, M.get f rho1 = Some (Vfun rhoc B h) -> fun_web B h = Some w ->
                         V k (Vfun rhoc B h) (Vconstr w c vs2)) ->
-      T ! c = Some (code, wc, length zs') ->
+      T ! c = Some (code, wc, length vs2, args) -> arg_vals vs2 args = Some avs ->
       M.get code rhop = Some (Vfun rtop Btop' code) ->
-      get_list zs' rhop = Some vs2 ->
+      get_list zs' rhop = Some avs ->
       Forall2 (var_rel k rho1 rhop) ys ys ->
       (forall m v1 v2, m < k -> V m v1 v2 -> E P_ge ex m (e, M.set x v1 rho1) (e', M.set x v2 rhop)) ->
       E P_sh ex k (Eletapp x f w ys e, rho1) (Eletapp x code wc (ys ++ zs') e', rhop).
     Proof.
-      intros Hw Hsel Hv HTc Hcode Hzs Hys Hcont r1 cin cout Hleq Hs. inv Hs.
+      intros Hw Hsel Hv HTc Hav Hcode Hzs Hys Hcont r1 cin cout Hleq Hs. inv Hs.
       - exists OOT, cin, <0>. split; [ constructor; eapply lt_one_w; eassumption |].
         split; [ simpl; eapply ge_plus_r | exact I ].
       - match goal with [ Hx : ex = true -> exposed_res r1 |- _ ] => rename Hx into Hexr end.
@@ -880,10 +1073,11 @@ Section DefuncRel.
               rename Hg into Hf1; rename Hfd into Hfd1; rename Hgl into Hgl1; rename Hset into Hset1;
               rename Hb into Hbody1; rename Hk into Hk1
           end.
-          edestruct (V_rec_inv k) as (zs & lams & code' & wc' & vcode & vzs & Heb & HLw & Hinc & HTc' &
-                                      Hwc & HLwc & Hndx & Hdxz & Hcx & Hgc & Hgz & Hrel);
+          edestruct (V_rec_inv k) as (zs & lams & code' & wc' & args' & vcode & vzs & avs' & Heb & HLw & Hinc & HTc' &
+                                      Hwc & HLwc & Hndx & Hdxz & Hcx & Hgc & Hgz & Hav' & Hrel);
             [ eapply Hv; [ eassumption | unfold fun_web; rewrite Hfd1; reflexivity ] | eassumption | eassumption | eassumption |].
-          subst. rewrite HTc in HTc'. injection HTc' as Hc1 Hc2 Hlz. subst code' wc'.
+          subst. assert (Heqs : code' = code /\ wc' = wc /\ args' = args) by (rewrite HTc in HTc'; inv HTc'; auto).
+          destruct Heqs as (-> & -> & ->). rewrite Hav in Hav'. injection Hav' as Heqa. subst avs'.
           rewrite Hw in Hbody1. inv Hbody1.
           match goal with [ Hx : false = true -> exposed_res _ |- _ ] => clear Hx end.
           inv H.
@@ -904,7 +1098,7 @@ Section DefuncRel.
           destruct (Hrel (k - 1) ltac:(lia)) as [Hvc Hvz].
           eapply (V_keeps_fun cenv sel (VT_dfn rtop) P_ge) in Hvc;
             [| unfold fun_web; rewrite Hfd2; reflexivity | eapply keeps_unsel; eassumption ].
-          edestruct (Hvc (vs ++ vzs) (args2 ++ vs2) (k - 2)) as (xs2 & e2 & rho2' & Hfd3 & Hset3 & Hbody);
+          edestruct (Hvc (vs ++ vzs) (args2 ++ avs) (k - 2)) as (xs2 & e2 & rho2' & Hfd3 & Hset3 & Hbody);
             [ rewrite !length_app; f_equal; [ eapply Forall2_length; eassumption | eapply Forall2_length; eassumption ]
             | eassumption | symmetry; eassumption |].
           edestruct Hbody as (r2 & cb2 & tb2 & Hst2 & Hpost & HR);
@@ -940,10 +1134,11 @@ Section DefuncRel.
               rename Hg into Hf1; rename Hfd into Hfd1; rename Hgl into Hgl1; rename Hset into Hset1;
               rename Hb into Hbody1
           end.
-          edestruct (V_rec_inv k) as (zs & lams & code' & wc' & vcode & vzs & Heb & HLw & Hinc & HTc' &
-                                      Hwc & HLwc & Hndx & Hdxz & Hcx & Hgc & Hgz & Hrel);
+          edestruct (V_rec_inv k) as (zs & lams & code' & wc' & args' & vcode & vzs & avs' & Heb & HLw & Hinc & HTc' &
+                                      Hwc & HLwc & Hndx & Hdxz & Hcx & Hgc & Hgz & Hav' & Hrel);
             [ eapply Hv; [ eassumption | unfold fun_web; rewrite Hfd1; reflexivity ] | eassumption | eassumption | eassumption |].
-          subst. rewrite HTc in HTc'. injection HTc' as Hc1 Hc2 Hlz. subst code' wc'.
+          subst. assert (Heqs : code' = code /\ wc' = wc /\ args' = args) by (rewrite HTc in HTc'; inv HTc'; auto).
+          destruct Heqs as (-> & -> & ->). rewrite Hav in Hav'. injection Hav' as Heqa. subst avs'.
           rewrite Hw in Hbody1. inv Hbody1.
           * exists OOT, cin0, <0>. split; [ constructor; eapply lt_one_w; eassumption |].
             split; [ simpl; one_w_norm; eapply ge_refl | exact I ].
@@ -966,7 +1161,7 @@ Section DefuncRel.
             destruct (Hrel (k - 1) ltac:(lia)) as [Hvc Hvz].
             eapply (V_keeps_fun cenv sel (VT_dfn rtop) P_ge) in Hvc;
               [| unfold fun_web; rewrite Hfd2; reflexivity | eapply keeps_unsel; eassumption ].
-            edestruct (Hvc (vs ++ vzs) (args2 ++ vs2) (k - 2)) as (xs2 & e2 & rho2' & Hfd3 & Hset3 & Hbody);
+            edestruct (Hvc (vs ++ vzs) (args2 ++ avs) (k - 2)) as (xs2 & e2 & rho2' & Hfd3 & Hset3 & Hbody);
               [ rewrite !length_app; f_equal; [ eapply Forall2_length; eassumption | eapply Forall2_length; eassumption ]
               | eassumption | symmetry; eassumption |].
             edestruct Hbody as (r2 & cin2 & cout2 & Hst2 & Hpost & HR);
@@ -1120,26 +1315,38 @@ Section DefuncRel.
 
     (** ** Calls through a selected web *)
 
+    Lemma NoDup_app_disj {A} (l1 l2 : list A) : NoDup (l1 ++ l2) -> Disjoint _ (FromList l1) (FromList l2).
+    Proof.
+      induction l1 as [| x l1 IH]; simpl; intros Hnd; constructor; intros z Hz; destruct Hz as [z Hz1 Hz2].
+      - inv Hz1.
+      - inv Hnd. destruct Hz1 as [Hz1 | Hz1].
+        + subst. eapply H1. eapply in_or_app. now right.
+        + eapply (IH H2). constructor; eassumption.
+    Qed.
+
     Lemma E_dispatch ex k e1 rho1 rho2 f w alts call avoid :
       exposedb w = false ->
-      alts_ok L T Btop w alts avoid -> avoid f ->
+      alts_ok L T Btop w alts avoid -> avoid f -> wf_env rho2 ->
       (forall (cin : fuel) r (cout : trace), bstep_fuel cenv ex rho1 e1 cin r cout ->
                           (r = OOT /\ cin << one_w e1) \/
                           ((exists c' : fuel, cin = algebra.plus c' (one_w e1)) /\
                            exists rhoc B h, M.get f rho1 = Some (Vfun rhoc B h) /\ fun_web B h = Some w)) ->
       var_rel k rho1 rho2 f f ->
-      (forall c vs2 code wc zs rhop,
-          List.In (c, code, wc, zs) alts ->
+      (forall c vs2 code wc zs args ss avs rhop,
+          List.In (c, code, wc, zs, args, ss) alts ->
           M.get f rho2 = Some (Vconstr w c vs2) ->
           (forall rhoc B h, M.get f rho1 = Some (Vfun rhoc B h) -> fun_web B h = Some w ->
                             V k (Vfun rhoc B h) (Vconstr w c vs2)) ->
-          T ! c = Some (code, wc, length zs) -> NoDup zs -> Disjoint _ (FromList zs) (avoid :|: Code) ->
-          Forall wf_val vs2 ->
-          set_lists zs vs2 rho2 = Some rhop ->
-          E P_sh ex k (e1, rho1) (call code wc zs, rhop)) ->
+          T ! c = Some (code, wc, length vs2, args) ->
+          arg_vals vs2 args = Some avs ->
+          Disjoint _ (FromList (zs ++ ss)) (avoid :|: Code) ->
+          (forall x, ~ List.In x (zs ++ ss) -> M.get x rhop = M.get x rho2) ->
+          wf_env rhop ->
+          get_list (arg_vars zs args ss) rhop = Some avs ->
+          E P_sh ex k (e1, rho1) (call code wc (arg_vars zs args ss), rhop)) ->
       E P_ge ex k (e1, rho1) (dispatch f w alts call, rho2).
     Proof.
-      intros Hw [HLw Halts] Hfa Hstuck Hvf Hk r1 cin cout Hleq Hs.
+      intros Hw [HLw Halts] Hfa Hwfr2 Hstuck Hvf Hk r1 cin cout Hleq Hs.
       destruct (Hstuck _ _ _ Hs) as [[-> Hoot] | ((c' & ->) & rhoc & B & h & Hf1 & Hfw)].
       - exists OOT, cin, <0>. split; [ constructor; eapply lt_one_w; eassumption |].
         split; [ simpl; eapply ge_refl | exact I ].
@@ -1150,27 +1357,39 @@ Section DefuncRel.
         pose proof Hv as Hv'.
         eapply (V_sel_internal cenv sel (VT_dfn rtop) P_ge) in Hv; [| eassumption | eassumption | eassumption ].
         destruct v2 as [w2 c vs2 | | |]; try contradiction.
-        destruct Hv as (xs' & zs0 & lams & code0 & wc0 & vcode & vzs & Hfd' & HLw' & Hinc & HTc0 & _ & _ & _ & _ & _ & _ & Hgz & Hrel).
+        destruct Hv as (xs' & ys0 & lams & code0 & wc0 & args0 & vcode & vys & avs & Hfd' & HLw' & Hinc & HTc0 & _ & _ & _ & _ & _ & _ & _ & Hav & _).
         rewrite Hfd in Hfd'. injection Hfd' as Hw2 Hxs Heb. subst w2 xs'. rewrite HLw in HLw'. injection HLw' as Hlams. subst lams.
-        destruct (Hrel 0 ltac:(lia)) as [_ Hvz].
-        edestruct (find_alt f w alts call c) as (code & wc & zs & n & Hina & Hft); [ eassumption |].
+        edestruct (find_alt f w alts call c) as (code & wc & zs & args & ss & n & Hina & Hft); [ eassumption |].
         pose proof Halts as Halts'. eapply Forall_forall in Halts'; [| exact Hina ].
-        destruct Halts' as (HTc & Hndz & Hdz).
-        rewrite HTc0 in HTc. injection HTc as -> -> Hlz.
-        assert (Hlen : length zs = length vs2).
-        { rewrite <- Hlz. erewrite get_list_length_eq; [| eassumption ]. eapply Forall2_length; eassumption. }
+        destruct Halts' as (HTc & Hnd & Hlss & Hint & Hdz).
+        assert (Heqs : code0 = code /\ wc0 = wc /\ length vs2 = length zs /\ args0 = args)
+          by (rewrite HTc0 in HTc; inv HTc; auto).
+        destruct Heqs as (-> & -> & Hlen & ->).
         assert (Hwf2 : Forall wf_val vs2).
         { eapply (V_wf_r cenv VT) in Hv'. inv Hv'. eassumption. }
+        assert (Hndz : NoDup zs) by (eapply NoDup_app_remove_r; eassumption).
+        assert (Hnds : NoDup ss) by (eapply NoDup_app_remove_l; eassumption).
+        assert (Hdzs : Disjoint _ (FromList zs) (FromList ss)) by (eapply NoDup_app_disj; eassumption).
         assert (HE : E P_ge ex k (e1, rho1) (dispatch f w alts call, rho2)).
         { unfold dispatch.
-          eapply (E_target_step_sh cenv (exposed.V cenv VT P_ge) ex k _ _ _ (projs zs w c 0 f (call code wc zs)) rho2).
+          eapply (E_target_step_sh cenv (exposed.V cenv VT P_ge) ex k _ _ _
+                    (projs zs w c 0 f (arg_binds zs args ss (call code wc (arg_vars zs args ss)))) rho2).
           { intros. eapply wrap_case; [ eassumption | eapply dispatch_cc; eauto | eassumption | eassumption ]. }
           eapply (E_projs_r cenv (exposed.V cenv VT P_ge) P_sh ex k _ w c f vs2 zs _ rho2 P_sh_target_steps Hf2 Hndz).
-          { intros Hc. eapply Hdz. constructor; [ exact Hc | left; exact Hfa ]. }
-          { exact Hlen. }
-          intros rhop Hsp. eapply Hk; eauto.
+          { intros Hc. eapply Hdz. constructor; [ eapply in_or_app; left; exact Hc | left; exact Hfa ]. }
+          { symmetry; exact Hlen. }
+          intros rhop0 Hsp.
+          eapply (E_arg_binds_r cenv (exposed.V cenv VT P_ge) P_sh ex k _ zs vs2 _ P_sh_target_steps);
+            [ eapply get_list_set_lists; eassumption | eapply Disjoint_sym; eassumption | eassumption |].
+          eapply Hk; eauto.
           - intros rhoc' B' h' Hf1' Hfw'. rewrite Hf1 in Hf1'. inv Hf1'. eassumption.
-          - rewrite <- Hlz. exact HTc0. }
+          - intros x Hx. rewrite arg_set_frame; [| intros Hc; eapply Hx; eapply in_or_app; now right ].
+            rewrite <- (set_lists_not_In _ _ _ _ _ Hsp); [ reflexivity |].
+            intros Hc; eapply Hx; eapply in_or_app; now left.
+          - eapply arg_set_wf; [ eapply wf_env_set_lists; eassumption | eassumption | eassumption ].
+          - eapply get_list_arg_vars; [ eassumption | eapply Disjoint_sym; eassumption | eassumption
+                                      | congruence | | eassumption ].
+            eapply set_lists_nth_error; eassumption. }
         eapply HE; eauto.
     Qed.
 
@@ -1196,12 +1415,45 @@ Section DefuncRel.
         match goal with [ Hd : find_def _ _ = Some _ |- _ ] => rewrite Hd end; reflexivity.
     Qed.
 
-    Lemma rhop_code k S rho1 rho2 rhop zs vs code :
-      Gd k S rho1 rho2 -> Code code -> Disjoint _ (FromList zs) Code ->
-      set_lists zs vs rho2 = Some rhop -> M.get code rhop = Some (Vfun rtop Btop' code).
+    Lemma rhop_code k S rho1 rho2 rhop X code :
+      Gd k S rho1 rho2 -> Code code -> Disjoint _ (FromList X) Code ->
+      (forall x, ~ List.In x X -> M.get x rhop = M.get x rho2) ->
+      M.get code rhop = Some (Vfun rtop Btop' code).
     Proof.
-      intros (_ & _ & Hc) Hcc Hd Hs. rewrite <- (set_lists_not_In _ _ _ _ _ Hs); eauto.
+      intros (_ & _ & Hc) Hcc Hd Hfr. rewrite Hfr; eauto.
       intros Hin. eapply Hd. constructor; eauto.
+    Qed.
+
+    Lemma Forall2_var_rel_frame k rho1 rho2 rhop ys1 ys X :
+      Forall2 (var_rel k rho1 rho2) ys1 ys -> Disjoint _ (FromList X) (FromList ys) ->
+      (forall x, ~ List.In x X -> M.get x rhop = M.get x rho2) ->
+      Forall2 (var_rel k rho1 rhop) ys1 ys.
+    Proof.
+      intros Hall Hd Hfr. induction Hall; constructor.
+      - intros v1 Hg. edestruct H as (v2 & Hg2 & Hv); [ exact Hg |]. exists v2. split; [| exact Hv ].
+        rewrite Hfr; [ exact Hg2 |]. intros Hc. eapply Hd. constructor; [ eassumption | now left ].
+      - eapply IHHall. eapply Disjoint_Included_r; [| eassumption ]. intros z Hz. now right.
+    Qed.
+
+    Lemma Gd_frame k S rho1 rho2 rhop X :
+      Gd k S rho1 rho2 -> Disjoint _ (FromList X) (S :|: Code) ->
+      (forall x, ~ List.In x X -> M.get x rhop = M.get x rho2) -> wf_env rhop ->
+      Gd k S rho1 rhop.
+    Proof.
+      intros (HG & Hb & Hc) Hd Hfr Hwf. split; [| split; [ exact Hb |] ].
+      - split; [ apply HG | split; [ exact Hwf |] ].
+        intros x Hx v1 Hget. edestruct (G_var_rel cenv VT P_ge k S rho1 rho2 x HG Hx v1 Hget) as (v2 & Hg2 & Hv).
+        eexists; split; [| exact Hv ]. rewrite Hfr; [ exact Hg2 |].
+        intros Hin. eapply Hd. constructor; [ exact Hin | now left ].
+      - intros c Hcc. rewrite Hfr; [ eauto |].
+        intros Hin. eapply Hd. constructor; [ exact Hin | now right ].
+    Qed.
+
+    Lemma arg_vars_avoid zs args ss (S : Ensemble var) :
+      Disjoint _ (FromList (zs ++ ss)) S -> forall z, List.In z (arg_vars zs args ss) -> ~ S z.
+    Proof.
+      intros Hd z Hz Hs. eapply Hd. constructor; [| eassumption ].
+      eapply in_or_app. eapply arg_vars_incl. eassumption.
     Qed.
 
     Lemma E_app_dfn ex k rho1 rho2 f w ys alts :
@@ -1211,16 +1463,14 @@ Section DefuncRel.
       E P_ge ex k (Eapp f w ys, rho1) (dispatch f w alts (fun code wc zs => Eapp code wc (ys ++ zs)), rho2).
     Proof.
       intros Hw Halts Hgd. pose proof Hgd as (HG & Hb & Hc).
-      eapply E_dispatch; eauto.
-      - now left.
+      eapply E_dispatch; [ eassumption | eassumption | now left | apply HG | | |].
       - intros. eapply stuck_app; eauto.
       - eapply (G_var_rel cenv VT); eauto. fv_mem.
-      - intros c vs2 code wc zs rhop Hin Hf2 Hv HTc Hndz Hdz Hwf Hsp.
+      - intros c vs2 code wc zs args ss avs rhop Hin Hf2 Hv HTc Hav Hdz Hfr Hwfp Hga.
         eapply E_app_core; eauto.
         + destruct Halts as [HLw _]. eapply sel_L_Some; eassumption.
         + eapply rhop_code; eauto. eapply Disjoint_Included_r; [| eassumption ]. sets.
-        + eapply get_list_set_lists; eassumption.
-        + eapply Forall2_var_rel_set_lists_r; [| | eassumption ].
+        + eapply Forall2_var_rel_frame; [| | eassumption ].
           * eapply (G_Forall2_var_rel cenv VT); eauto. normalize_occurs_free. sets.
           * eapply Disjoint_Included_r; [| eassumption ]. sets.
     Qed.
@@ -1234,21 +1484,19 @@ Section DefuncRel.
         (dispatch f w alts (fun code wc zs => Eletapp x code wc (ys ++ zs) e'), rho2).
     Proof.
       intros Hw Hx Halts Hgd Hcont. pose proof Hgd as (HG & Hb & Hc).
-      eapply E_dispatch; eauto.
-      - left; left; constructor.
+      eapply E_dispatch; [ eassumption | eassumption | left; left; constructor | apply HG | | |].
       - intros. eapply stuck_letapp; eauto.
       - eapply (G_var_rel cenv VT); eauto. fv_mem.
-      - intros c vs2 code wc zs rhop Hin Hf2 Hv HTc Hndz Hdz Hwf Hsp.
+      - intros c vs2 code wc zs args ss avs rhop Hin Hf2 Hv HTc Hav Hdz Hfr Hwfp Hga.
         eapply E_letapp_core; eauto.
         + destruct Halts as [HLw _]. eapply sel_L_Some; eassumption.
         + eapply rhop_code; eauto. eapply Disjoint_Included_r; [| eassumption ]. sets.
-        + eapply get_list_set_lists; eassumption.
-        + eapply Forall2_var_rel_set_lists_r; [| | eassumption ].
+        + eapply Forall2_var_rel_frame; [| | eassumption ].
           * eapply (G_Forall2_var_rel cenv VT); eauto. normalize_occurs_free. sets.
           * eapply Disjoint_Included_r; [| eassumption ]. sets.
         + intros m v1 v2 Hlt Hv12. eapply Hcont; [ eassumption |].
           eapply Gd_set; [| eassumption | eassumption ].
-          eapply Gd_set_lists_r; [| | eassumption | eassumption ].
+          eapply Gd_frame; [| | eassumption | eassumption ].
           * eapply Gd_antimon; [ eapply Gd_mono; [ eassumption | lia ] |]. normalize_occurs_free. sets.
           * eapply Disjoint_Included_r; [| eassumption ]. intros z Hz. inv Hz.
             -- inv H. left. right. eassumption.
@@ -1276,23 +1524,21 @@ Section DefuncRel.
           + destruct Hin as [z Hin | z Hin]; [ inv Hin; congruence | contradiction ].
           + destruct Hin as [Hin _]. eapply Hje. exact Hin. }
       eapply E_target_step; [ eapply P_ge_target_steps | intros; eapply wrap_fun; eassumption |].
-      eapply E_dispatch; eauto.
-      - left; left; constructor.
+      eapply E_dispatch; [ eassumption | eassumption | left; left; constructor | apply Hgd' | | |].
       - intros. eapply stuck_letapp; eauto.
       - eapply (G_var_rel cenv VT); [ apply Hgd' | fv_mem ].
-      - intros c vs2 code wc zs rhop Hin Hf2 Hv HTc Hndz Hdz Hwf Hsp.
+      - intros c vs2 code wc zs args ss avs rhop Hin Hf2 Hv HTc Hav Hdz Hfr Hwfp Hga.
         eapply E_letapp_core; eauto.
         + destruct Halts as [HLw _]. eapply sel_L_Some; eassumption.
         + eapply rhop_code; [ exact Hgd' | | | eassumption ]; eauto.
           eapply Disjoint_Included_r; [| eassumption ]. sets.
-        + eapply get_list_set_lists; eassumption.
-        + eapply Forall2_var_rel_set_lists_r; [| | eassumption ].
+        + eapply Forall2_var_rel_frame; [| | eassumption ].
           * eapply (G_Forall2_var_rel cenv VT); [ apply Hgd' |]. normalize_occurs_free. sets.
           * eapply Disjoint_Included_r; [| eassumption ]. sets.
         + intros m v1 v2 Hlt Hv12.
           eapply E_join_call; [ eassumption | | rewrite M.gss; reflexivity | ].
           * rewrite M.gso; [| congruence ].
-            rewrite <- (set_lists_not_In _ _ _ _ _ Hsp); [ rewrite HJ, M.gss; reflexivity |].
+            rewrite Hfr; [ rewrite HJ, M.gss; reflexivity |].
             intros Hinj. eapply Hdz. constructor; [ eassumption | left; right; constructor ].
           * eapply Hcont; [ eassumption |].
             eapply Gd_set; [| eassumption | eassumption ].
@@ -1306,11 +1552,28 @@ Section DefuncRel.
     Lemma not_exposed_record w c vs : exposedb w = false -> ~ exposed_val (Vconstr w c vs).
     Proof. intros Hw Hexp. rewrite exposed_val_Vconstr in Hexp. destruct Hexp. congruence. Qed.
 
-    Lemma V_bundle k rho1 rho2 B Bk rs :
-      trans_bundle rs B Bk rs ->
+    Lemma get_list_nth_error (xs : list var) (vs : list val) rho i x :
+      get_list xs rho = Some vs -> nth_error xs i = Some x -> M.get x rho = nth_error vs i.
+    Proof.
+      revert vs i. induction xs as [| y xs IH]; intros vs i Hg Hx; [ destruct i; inv Hx |].
+      simpl in Hg. destruct (M.get y rho) eqn:Hy; [| congruence ].
+      destruct (get_list xs rho) eqn:Hxs; [| congruence ]. inv Hg.
+      destruct i; simpl in *; [ inv Hx; exact Hy | eauto ].
+    Qed.
+
+    Lemma Forall2_nth_error_l {A B} (R : A -> B -> Prop) l1 l2 i a :
+      Forall2 R l1 l2 -> nth_error l1 i = Some a -> exists b, nth_error l2 i = Some b /\ R a b.
+    Proof.
+      intros H. revert i. induction H; intros i Hi; [ destruct i; inv Hi |].
+      destruct i; simpl in *; [ inv Hi; eauto | eauto ].
+    Qed.
+
+    Lemma V_bundle k rho1 rho2 E B Bk rs :
+      trans_bundle E rs B Bk rs ->
       NoDup (fnames B) ->
       (rs <> [] -> Disjoint _ (name_in_fundefs B) Code) ->
       Disjoint _ (FromList (rec_fields rs)) (FromList (rec_names rs)) ->
+      FromList E \subset occurs_free_fundefs B :|: name_in_fundefs B ->
       IH_exp k ->
       G k (occurs_free_fundefs B) rho1 rho2 ->
       term_util.binding_in_map (occurs_free_fundefs B) rho1 ->
@@ -1320,9 +1583,9 @@ Section DefuncRel.
                         exists vs2, get_list zs (def_funs Bk Bk rho2 rho2) = Some vs2 /\
                                     V k (Vfun rho1 B f) (Vconstr w c vs2)).
     Proof.
-      intros HB Hnd Hdn Hdfn. induction k as [k IHk] using lt_wf_rec.
+      intros HB Hnd Hdn Hdfn HE. induction k as [k IHk] using lt_wf_rec.
       intros Hexp HG Hbim Hcode.
-      destruct (trans_bundle_nodup _ _ _ _ _ _ _ HB Hnd) as [Hndr Hdkr].
+      destruct (trans_bundle_nodup _ _ _ _ _ _ _ _ HB Hnd) as [Hndr Hdkr].
       assert (Hnames : forall g, name_in_fundefs B g <-> name_in_fundefs Bk g \/ List.In g (rec_names rs))
         by (eapply trans_bundle_names; eauto).
       assert (Hlow : forall j, j < k ->
@@ -1341,17 +1604,13 @@ Section DefuncRel.
                         exists vs2, get_list zs (def_funs Bk Bk rho2 rho2) = Some vs2 /\
                                     V k (Vfun rho1 B f) (Vconstr w c vs2)).
       { intros f w c zs Hr.
-        edestruct (trans_bundle_sel _ _ _ _ _ _ _ _ _ _ _ HB Hnd Hr) as
-          (xs & lams & code & wc & Hfd & Hw & HLw & Hinc & HTc & Hcc & Hwc & HLwc & Hndx & Hdxz & Hcx).
+        edestruct (trans_bundle_sel _ _ _ _ _ _ _ _ _ _ _ _ HB Hnd Hr) as
+          (-> & xs & ys & lams & code & wc & args & Hfd & Hw & HLw & Hinc & HTc & Hcc & Hwc & HLwc & Hndx & Hdxy & Hcx & Hargs).
         assert (Hrs : rs <> []) by (destruct rs; simpl in Hr; congruence).
         specialize (Hdn Hrs).
-        assert (Hfv : forall z, List.In z zs -> ~ name_in_fundefs B z -> occurs_free_fundefs B z).
-        { intros z Hz Hn. eapply occurs_free_in_fun in Hfd. edestruct (Hfd z) as [z' Hz' | z' Hz'].
-          - eapply occurs_free_Eapp. left. eapply in_or_app. now right.
-          - exfalso. eapply Hdxz. constructor; eassumption.
-          - destruct Hz' as [z' Hz' | z' Hz']; [ contradiction | exact Hz' ]. }
-        edestruct (get_list_pointwise (fun v1 v2 => forall j, j < k -> V j v1 v2) zs
-                     (def_funs B B rho1 rho1) (def_funs Bk Bk rho2 rho2)) as (vzs & vs2 & Hg1 & Hg2 & Hall).
+        (* the fields: the environment of the bundle *)
+        edestruct (get_list_pointwise (fun v1 v2 => forall j, j < k -> V j v1 v2) E
+                     (def_funs B B rho1 rho1) (def_funs Bk Bk rho2 rho2)) as (vE & vs2 & Hg1 & Hg2 & Hall).
         { intros z Hz.
           assert (Hzr : ~ List.In z (rec_names rs)).
           { intros Hc. eapply Hdfn. constructor; [ eapply rec_of_fields; eassumption | eassumption ]. }
@@ -1360,10 +1619,34 @@ Section DefuncRel.
             split; [ rewrite def_funs_eq; [ reflexivity | eassumption ] |].
             intros j Hj. eapply (proj1 (Hlow j Hj)). eassumption.
           - assert (HnB : ~ name_in_fundefs B z) by (intros Hc; apply Hnames in Hc; tauto).
-            edestruct (Hbim z) as [v1 Hv1]; [ eapply Hfv; eassumption |].
-            edestruct (G_var_rel cenv VT P_ge k _ rho1 rho2 z HG) as (v2 & Hv2 & Hv); [ eapply Hfv; eassumption | eassumption |].
+            assert (Hfz : occurs_free_fundefs B z) by (destruct (HE z Hz); [ eassumption | contradiction ]).
+            edestruct (Hbim z) as [v1 Hv1]; [ exact Hfz |].
+            edestruct (G_var_rel cenv VT P_ge k _ rho1 rho2 z HG) as (v2 & Hv2 & Hv); [ exact Hfz | eassumption |].
             exists v1, v2. rewrite !def_funs_neq; eauto. split; [ eassumption | split; [ eassumption |] ].
             intros j Hj. eapply (V_mono cenv VT); [ eassumption | lia ]. }
+        (* the extra arguments of the code function *)
+        assert (Hargs' : exists vys avs,
+                   get_list ys (def_funs B B rho1 rho1) = Some vys /\ arg_vals vs2 args = Some avs /\
+                   Forall2 (fun v1 v2 => forall j, j < k -> V j v1 v2) vys avs).
+        { clear Hfd Hdxy HTc Hcx. induction Hargs as [| a y args ys Ha Hargs IH]; simpl.
+          - do 2 eexists. split; [ reflexivity | split; [ reflexivity | constructor ] ].
+          - destruct IH as (vys & avs & Hgy & Hav & Hvs). destruct a as [i | w' c']; simpl in Ha.
+            + pose proof (get_list_nth_error E vE _ i y Hg1 Ha) as Hy1.
+              assert (Hlen1 : length vE = length E) by (symmetry; eapply get_list_length_eq; eassumption).
+              destruct (nth_error vE i) as [v1 |] eqn:Hv1.
+              2:{ exfalso. eapply nth_error_None in Hv1. rewrite Hlen1 in Hv1.
+                  assert (Hi : i < length E) by (eapply nth_error_Some; congruence). lia. }
+              edestruct (Forall2_nth_error_l (fun v1 v2 => forall j, j < k -> V j v1 v2) vE vs2 i v1 Hall Hv1)
+                as (v2 & Hv2 & Hv12).
+              rewrite Hy1, Hgy, Hav, Hv2.
+              do 2 eexists. split; [ reflexivity | split; [ reflexivity |] ]. constructor; eauto.
+            + assert (Hry : rec_of rs y = Some (w', c', E)) by (eapply In_rec_of; eassumption).
+              assert (HyB : name_in_fundefs B y) by (eapply (proj2 (Hnames y)); right; eapply rec_of_In; eassumption).
+              rewrite def_funs_eq; [| exact HyB ]. rewrite Hgy, Hav.
+              do 2 eexists. split; [ reflexivity | split; [ reflexivity |] ]. constructor; [| exact Hvs ].
+              intros j Hj. edestruct (proj2 (Hlow j Hj) y w' c' E Hry) as (vs' & Hg' & Hv').
+              rewrite Hg2 in Hg'. inv Hg'. exact Hv'. }
+        destruct Hargs' as (vys & avs & Hgy & Hav & Hvys).
         assert (Hcfv : occurs_free_fundefs B code).
         { eapply occurs_free_in_fun in Hfd. edestruct (Hfd code) as [z' Hz' | z' Hz'].
           - eapply occurs_free_Eapp. now right.
@@ -1378,20 +1661,23 @@ Section DefuncRel.
         { specialize (Hcode code Hcc). rewrite def_funs_neq in Hcode; [ congruence | eassumption ]. }
         subst vc2.
         exists vs2. split; [ eassumption |].
+        assert (Hlen : length vs2 = length E) by (symmetry; eapply get_list_length_eq; eassumption).
         eapply (V_Vfun_sel cenv sel (VT_dfn rtop) P_ge); [ eassumption | | eapply not_exposed_record; eassumption
                                                          | eassumption | eassumption | eapply sel_L_Some; eassumption |].
         - constructor; [ congruence |]. eapply wf_env_get_list; eassumption.
-        - unfold VT_dfn. exists xs, zs, lams, code, wc, vcode, vzs.
-          do 9 (split; [ eassumption |]).
+        - unfold VT_dfn. exists xs, ys, lams, code, wc, args, vcode, vys, avs.
+          split; [ eassumption |]. split; [ eassumption |]. split; [ eassumption |].
+          split; [ rewrite Hlen; eassumption |].
+          do 5 (split; [ eassumption |]).
           split; [ rewrite def_funs_neq; eassumption |].
-          split; [ eassumption |].
+          split; [ eassumption |]. split; [ eassumption |].
           intros j Hj. split; [ eapply (V_mono cenv VT); [ eassumption | lia ] |].
           eapply Forall2_monotonic; [| eassumption ]. intros v1 v2 Hv12. eapply Hv12. eassumption. }
       split; [| exact Hrecs ].
       (* the kept functions *)
       intros f Hfk.
       edestruct name_in_fundefs_find_def as (w & xs & e2 & Hfd2); [ eassumption |].
-      edestruct (trans_bundle_keep _ _ _ _ _ _ _ _ _ _ _ HB Hnd Hfd2) as (e & e' & Hfd1 & -> & Htr & Hkw & Hdx).
+      edestruct (trans_bundle_keep _ _ _ _ _ _ _ _ _ _ _ _ HB Hnd Hfd2) as (e & e' & Hfd1 & -> & Htr & Hkw & Hdx).
       eapply (V_Vfun_keeps cenv sel (VT_dfn rtop) P_ge); eauto.
       eapply (V_fun_def cenv VT P_ge); eauto.
       intros j vs1 vs2 rho1' rho2' Hj Hexpv Hvs Hs1 Hs2.
@@ -1452,11 +1738,12 @@ Section DefuncRel.
           eapply (proj2 (Hnames c)). now right.
     Qed.
 
-    Lemma E_fun_dfn ex k rho1 rho2 B Bk rs e e' :
-      trans_bundle rs B Bk rs ->
+    Lemma E_fun_dfn ex k rho1 rho2 Ev B Bk rs e e' :
+      trans_bundle Ev rs B Bk rs ->
       NoDup (fnames B) ->
       (rs <> [] -> Disjoint _ (name_in_fundefs B) Code) ->
       Disjoint _ (FromList (rec_fields rs)) (FromList (rec_names rs)) ->
+      FromList Ev \subset occurs_free_fundefs B :|: name_in_fundefs B ->
       IH_exp k ->
       (forall rho1' rho2', Gd k (occurs_free e) rho1' rho2' -> E P_ge ex k (e, rho1') (e', rho2')) ->
       G k (occurs_free (Efun B e)) rho1 rho2 ->
@@ -1464,11 +1751,11 @@ Section DefuncRel.
       code_env (def_funs Bk Bk rho2 rho2) ->
       E P_ge ex k (Efun B e, rho1) (fun_recs Bk rs e', rho2).
     Proof.
-      intros HB Hnd Hdn Hdfn Hexp Hcont HG Hbim Hcode.
-      destruct (trans_bundle_nodup _ _ _ _ _ _ _ HB Hnd) as [Hndr Hdkr].
+      intros HB Hnd Hdn Hdfn HE Hexp Hcont HG Hbim Hcode.
+      destruct (trans_bundle_nodup _ _ _ _ _ _ _ _ HB Hnd) as [Hndr Hdkr].
       assert (Hnames : forall g, name_in_fundefs B g <-> name_in_fundefs Bk g \/ List.In g (rec_names rs))
         by (eapply trans_bundle_names; eauto).
-      edestruct (V_bundle k rho1 rho2 B Bk rs) as [Hkeep Hrecs]; eauto.
+      edestruct (V_bundle k rho1 rho2 Ev B Bk rs) as [Hkeep Hrecs]; eauto.
       { eapply (G_antimon cenv VT); [ eassumption | eapply occurs_free_fundefs_Efun_Included ]. }
       { intros x Hx. eapply Hbim. eapply occurs_free_fundefs_Efun_Included. eassumption. }
       assert (Hint : recs_internal rs) by (eapply trans_bundle_internal; eassumption).
@@ -1594,7 +1881,7 @@ Section DefuncRel.
   (** ** Top level *)
 
   Theorem dfn_correct e0 e0' :
-    trans_bundle [] Btop Btop' [] -> NoDup (fnames Btop) -> trans e0 e0' ->
+    trans_bundle [] [] Btop Btop' [] -> NoDup (fnames Btop) -> trans e0 e0' ->
     E_web cenv P_ge P_ge (Efun Btop e0) (Efun Btop' e0').
   Proof.
     intros HB Hnd Htr k rho1 rho2 Htop Hb.
@@ -1605,10 +1892,11 @@ Section DefuncRel.
     eapply (E_fun_dfn rho2); eauto.
     - intros Hc; congruence.
     - constructor. intros z Hz. inv Hz. inv H.
+    - intros z Hz. inv Hz.
     - intros m ex e e' r1 r2 Hm. eapply dfn_fundamental; eauto.
     - intros rho1' rho2'. eapply dfn_fundamental; eauto.
     - intros c Hc. rewrite def_funs_eq; [ reflexivity |].
-      eapply (proj1 (trans_bundle_names _ _ _ _ _ _ _ HB c)) in Hc. destruct Hc as [Hc | Hc]; [ exact Hc | inv Hc ].
+      eapply (proj1 (trans_bundle_names _ _ _ _ _ _ _ _ HB c)) in Hc. destruct Hc as [Hc | Hc]; [ exact Hc | inv Hc ].
   Qed.
 
 End DefuncRel.
@@ -1621,13 +1909,13 @@ Section DefuncTop.
 
   Context {fuel : Type} {Hf : @fuel_resource fuel} {trace : Type} {Ht : @trace_resource trace}.
 
-  Variables (L : WM.t (list ctor_tag)) (T : M.t (var * web * nat)) (Btop : fundefs).
+  Variables (L : WM.t (list ctor_tag)) (T : M.t (var * web * nat * list arg)) (Btop : fundefs).
 
   Hypothesis HL :
     forall w lams, WM.get w L = Some lams ->
                    exists it, Forall (fun c => exists info, M.get c cenv = Some info /\
                                                             term.ctor_ind_tag info = it) lams.
-  Hypothesis HT : forall c code wc n, T ! c = Some (code, wc, n) -> Code Btop code.
+  Hypothesis HT : forall c code wc n args, T ! c = Some (code, wc, n, args) -> Code Btop code.
 
   (** Defunctionalization is in the λweb relation. *)
   Theorem dfn_correct_top e et :
@@ -1721,20 +2009,54 @@ Proof.
   right. split; eauto. intros [Hc | Hc]; [ subst; eapply H0; constructor | contradiction ].
 Qed.
 
+Fixpoint sib_vars (args : list arg) (ss : list var) : list var :=
+  match args, ss with
+  | ASib _ _ :: args, s :: ss => s :: sib_vars args ss
+  | AEnv _ :: args, _ :: ss => sib_vars args ss
+  | _, _ => []
+  end.
+
+Lemma arg_vars_sib zs args ss z : List.In z (arg_vars zs args ss) -> List.In z zs \/ List.In z (sib_vars args ss).
+Proof.
+  revert ss. induction args as [| [i | w c] args IH]; intros [| s ss] Hz; simpl in *; try contradiction.
+  - destruct (nth_error zs i) as [z' |] eqn:Hz'; [ destruct Hz as [Hz | Hz] |].
+    + subst. left. eapply nth_error_In. eassumption.
+    + eauto.
+    + eauto.
+  - destruct Hz as [Hz | Hz]; [ subst; right; now left |].
+    destruct (IH ss Hz); [ now left | right; now right ].
+Qed.
+
+Lemma occurs_free_arg_binds zs args ss e z :
+  occurs_free (arg_binds zs args ss e) z -> List.In z zs \/ (occurs_free e z /\ ~ List.In z (sib_vars args ss)).
+Proof.
+  revert ss. induction args as [| [i | w c] args IH]; intros [| s ss] Hz; simpl in *; eauto.
+  eapply occurs_free_Econstr in Hz. destruct Hz as [z Hz | z [Hz Hn]]; [ now left |].
+  destruct (IH ss Hz) as [Hz' | [Hz' Hn']]; [ now left |].
+  right. split; [ exact Hz' |]. intros [Hc | Hc]; [ subst; eapply Hn; constructor | contradiction ].
+Qed.
+
 Lemma occurs_free_dispatch g w alts call z :
   occurs_free (dispatch g w alts call) z ->
-  z = g \/ exists c code wc zs, List.In (c, code, wc, zs) alts /\
-                                occurs_free (call code wc zs) z /\ ~ List.In z zs.
+  z = g \/ exists c code wc zs args ss,
+              List.In (c, code, wc, zs, args, ss) alts /\
+              occurs_free (call code wc (arg_vars zs args ss)) z /\
+              ~ List.In z zs /\ ~ List.In z (sib_vars args ss).
 Proof.
-  unfold dispatch. induction alts as [| [[[c code] wc] zs] alts IH]; simpl; intros Hz.
+  unfold dispatch. induction alts as [| [[[[[c code] wc] zs] args] ss] alts IH]; simpl; intros Hz.
   - eapply occurs_free_Ecase_nil in Hz. inv Hz. now left.
   - eapply occurs_free_Ecase_cons in Hz. destruct Hz as [z Hz | z Hz]; [ inv Hz; now left |].
     destruct Hz as [z Hz | z Hz].
     + destruct (occurs_free_projs _ _ _ _ _ _ _ Hz) as [Hg | [Hz' Hn]]; [ now left |].
-      right. do 4 eexists. split; [ now left | eauto ].
-    + destruct (IH Hz) as [Hg | (c' & code' & wc' & zs' & Hin & Hz' & Hn)]; [ now left |].
-      right. do 4 eexists. split; [ now right | eauto ].
+      destruct (occurs_free_arg_binds _ _ _ _ _ Hz') as [Hc | [Hz'' Hns]]; [ contradiction |].
+      right. do 6 eexists. split; [ now left | eauto ].
+    + destruct (IH Hz) as [Hg | (c' & code' & wc' & zs' & args' & ss' & Hin & Hz' & Hn & Hns)]; [ now left |].
+      right. do 6 eexists. split; [ now right | eauto ].
 Qed.
+
+Lemma arg_vars_bound zs args ss z :
+  List.In z (arg_vars zs args ss) -> ~ List.In z zs -> ~ List.In z (sib_vars args ss) -> False.
+Proof. intros Hz Hn Hns. destruct (arg_vars_sib _ _ _ _ Hz); contradiction. Qed.
 
 Lemma occurs_free_fun_recs Bk rs e z :
   occurs_free (fun_recs Bk rs e) z ->
@@ -1745,20 +2067,18 @@ Proof.
   intros Hz. split; [ intros Hc; inv Hc | now left ].
 Qed.
 
-Lemma rec_fields_cons f w c zs rs : rec_fields ((f, w, c, zs) :: rs) = zs ++ rec_fields rs.
-Proof. reflexivity. Qed.
 
 Section DefuncFV.
 
-  Variables (L : WM.t (list ctor_tag)) (T : M.t (var * web * nat)) (Btop : fundefs).
+  Variables (L : WM.t (list ctor_tag)) (T : M.t (var * web * nat * list arg)) (Btop : fundefs).
 
   (** The code functions of the lambda sets are among [Btop] *)
-  Hypothesis (HT : forall c code wc n, T ! c = Some (code, wc, n) -> Code Btop code).
+  Hypothesis (HT : forall c code wc n args, T ! c = Some (code, wc, n, args) -> Code Btop code).
 
   Local Notation Code := (Code Btop).
 
-  Lemma alts_ok_code w alts avoid c code wc zs :
-    alts_ok L T Btop w alts avoid -> List.In (c, code, wc, zs) alts -> Code code.
+  Lemma alts_ok_code w alts avoid c code wc zs args ss :
+    alts_ok L T Btop w alts avoid -> List.In (c, code, wc, zs, args, ss) alts -> Code code.
   Proof.
     intros [_ Hall] Hin. eapply Forall_forall in Hall; [| exact Hin ]. simpl in Hall.
     destruct Hall as [HTc _]. eapply HT; eassumption.
@@ -1767,10 +2087,10 @@ Section DefuncFV.
   Lemma trans_fv :
     (forall e e', trans L T Btop e e' ->
                   forall z, occurs_free e' z -> occurs_free e z \/ Code z) /\
-    (forall rs0 B Bk rs, trans_bundle L T Btop rs0 B Bk rs ->
+    (forall E rs0 B Bk rs, trans_bundle L T Btop E rs0 B Bk rs ->
        (forall z, bfv Bk z ->
                   ((bfv B z \/ Code z) /\ ~ List.In z (rec_names rs0)) \/ List.In z (rec_fields rs0)) /\
-       (forall z, List.In z (rec_fields rs) -> bfv B z) /\
+       (forall z, List.In z (rec_fields rs) -> List.In z E) /\
        (forall z, name_in_fundefs B z <-> name_in_fundefs Bk z \/ List.In z (rec_names rs))).
   Proof.
     eapply trans_mutind.
@@ -1804,11 +2124,11 @@ Section DefuncFV.
     - (* Eletapp, continuation duplicated *)
       intros x f w ys e e' alts Hw Hx Ha Ht IH z Hz.
       eapply occurs_free_dispatch in Hz.
-      destruct Hz as [Hz | (c & code & wc & zs & Hin & Hz & Hn)].
+      destruct Hz as [Hz | (c & code & wc & zs & args & ss & Hin & Hz & Hn & Hns)].
       + subst. left. eapply occurs_free_Eletapp. left. now left.
       + eapply occurs_free_Eletapp in Hz. destruct Hz as [? [? Hz | ? Hz] | ? [Hz Hnx]].
         * inv Hz. right. eapply alts_ok_code; eauto.
-        * eapply in_app_or in Hz. destruct Hz as [Hz | Hz]; [| contradiction ].
+        * eapply in_app_or in Hz. destruct Hz as [Hz | Hz]; [| exfalso; eapply arg_vars_bound; eassumption ].
           left. eapply occurs_free_Eletapp. left. now right.
         * destruct (IH _ Hz) as [Hz' | Hz']; [| now right ].
           left. eapply occurs_free_Eletapp. right. constructor; eauto.
@@ -1816,11 +2136,11 @@ Section DefuncFV.
       intros x f w ys e e' alts j wj Hw Hx Hwj Hj Hjx Hjf Hjys Hje Ha Ht IH z Hz.
       eapply occurs_free_Efun_iff in Hz. destruct Hz as [Hnj [Hz | Hz]].
       + eapply occurs_free_dispatch in Hz.
-        destruct Hz as [Hz | (c & code & wc & zs & Hin & Hz & Hn)].
+        destruct Hz as [Hz | (c & code & wc & zs & args & ss & Hin & Hz & Hn & Hns)].
         * subst. left. eapply occurs_free_Eletapp. left. now left.
         * eapply occurs_free_Eletapp in Hz. destruct Hz as [? [? Hz | ? Hz] | ? [Hz Hnx]].
           -- inv Hz. right. eapply alts_ok_code; eauto.
-          -- eapply in_app_or in Hz. destruct Hz as [Hz | Hz]; [| contradiction ].
+          -- eapply in_app_or in Hz. destruct Hz as [Hz | Hz]; [| exfalso; eapply arg_vars_bound; eassumption ].
              left. eapply occurs_free_Eletapp. left. now right.
           -- exfalso. eapply occurs_free_Eapp in Hz. destruct Hz as [z Hz | z Hz].
              ++ destruct Hz as [Hz | []]. subst. eapply Hnx. constructor.
@@ -1833,39 +2153,43 @@ Section DefuncFV.
     - (* Eapp, dispatched *)
       intros f w ys alts Hw Ha z Hz.
       eapply occurs_free_dispatch in Hz.
-      destruct Hz as [Hz | (c & code & wc & zs & Hin & Hz & Hn)].
+      destruct Hz as [Hz | (c & code & wc & zs & args & ss & Hin & Hz & Hn & Hns)].
       + subst. left. eapply occurs_free_Eapp. now right.
       + eapply occurs_free_Eapp in Hz. destruct Hz as [z Hz | z Hz].
-        * eapply in_app_or in Hz. destruct Hz as [Hz | Hz]; [| contradiction ].
+        * eapply in_app_or in Hz. destruct Hz as [Hz | Hz]; [| exfalso; eapply arg_vars_bound; eassumption ].
           left. eapply occurs_free_Eapp. now left.
         * inv Hz. right. eapply alts_ok_code; eauto.
     - (* Efun *)
-      intros B Bk rs e e' Hb IHb Hnd Hdc Hdr Ht IH z Hz.
+      intros Ev B Bk rs e e' Hb IHb Hnd Hdc Hdr HE Ht IH z Hz.
       destruct IHb as (Hbk & Hfields & Hnames).
       eapply occurs_free_fun_recs in Hz. destruct Hz as [Hnk [Hz | Hz]].
       + eapply occurs_free_bind_recs in Hz. destruct Hz as [[Hz Hnr] | Hz].
         * destruct (IH _ Hz) as [Hz' | Hz']; [| now right ].
           left. eapply occurs_free_Efun_iff. split; [| now left ].
           intros Hc. eapply Hnames in Hc. destruct Hc; contradiction.
-        * left. eapply occurs_free_Efun_iff. split; [| right; eapply Hfields; eassumption ].
-          intros Hc. eapply Hnames in Hc. destruct Hc as [Hc | Hc]; [ contradiction |].
-          eapply Hdr; constructor; eassumption.
+        * left. eapply occurs_free_Efun_iff.
+          destruct (HE z (Hfields z ltac:(eassumption))) as [? Hof | ? Hnm].
+          -- eapply occurs_free_fundefs_iff in Hof. destruct Hof as [Hn' Hb'']. split; [ exact Hn' | now right ].
+          -- exfalso. eapply Hnames in Hnm. destruct Hnm as [Hc | Hc]; [ contradiction |].
+             eapply Hdr; constructor; eassumption.
       + destruct (Hbk _ Hz) as [[[Hb' | Hb'] Hnr] | Hb']; [| now right |].
         * left. eapply occurs_free_Efun_iff. split; [| now right ].
           intros Hc. eapply Hnames in Hc. destruct Hc; contradiction.
-        * left. eapply occurs_free_Efun_iff. split; [| right; eapply Hfields; eassumption ].
-          intros Hc. eapply Hnames in Hc. destruct Hc as [Hc | Hc]; [ contradiction |].
-          eapply Hdr; constructor; eassumption.
+        * left. eapply occurs_free_Efun_iff.
+          destruct (HE z (Hfields z ltac:(eassumption))) as [? Hof | ? Hnm].
+          -- eapply occurs_free_fundefs_iff in Hof. destruct Hof as [Hn' Hb'']. split; [ exact Hn' | now right ].
+          -- exfalso. eapply Hnames in Hnm. destruct Hnm as [Hc | Hc]; [ contradiction |].
+             eapply Hdr; constructor; eassumption.
     - intros x p e z Hz. now left.
     - intros x p ys e z Hz. now left.
     - intros x z Hz. now left.
     - (* TB_nil *)
-      intros rs0. split; [| split ]; simpl.
+      intros E rs0. split; [| split ]; simpl.
       + intros z Hz. inv Hz.
       + intros z [].
       + intros z. split; intros H; [ inv H | destruct H as [H | []]; inv H ].
     - (* TB_keep *)
-      intros rs0 f w xs e e' B Bk rs Hk Hd Ht IH Hb IHb.
+      intros E rs0 f w xs e e' B Bk rs Hk Hd Ht IH Hb IHb.
       destruct IHb as (Hbk & Hfields & Hnames). split; [| split ].
       + intros z Hz. simpl in Hz. destruct Hz as [? [Hz Hnx] | ? Hz].
         * eapply occurs_free_bind_recs in Hz. destruct Hz as [[Hz Hnr] | Hz]; [| now right ].
@@ -1875,23 +2199,20 @@ Section DefuncFV.
         * destruct (Hbk _ Hz) as [[[Hb' | Hb'] Hnr] | Hb']; [| | now right ].
           -- left. split; [ left; now right | eassumption ].
           -- left. split; [ now right | eassumption ].
-      + intros z Hz. right. eapply Hfields. eassumption.
+      + intros z Hz. eapply Hfields. eassumption.
       + intros z. simpl. split.
         * intros Hz. destruct Hz as [z Hz | z Hz]; [ left; now left |].
           eapply Hnames in Hz. destruct Hz; [ left; now right | now right ].
         * intros [Hz | Hz]; [ destruct Hz as [z Hz | z Hz]; [ now left | right; eapply Hnames; now left ] |].
           right. eapply Hnames. now right.
     - (* TB_sel *)
-      intros rs0 f w xs zs B Bk rs lams c code wc Hw HL Hin HTc Hc Hwc HLc Hnd Hdxz Hcx Hb IHb.
+      intros E rs0 f w xs zs B Bk rs lams c code wc args Hw HL Hin HTc Hc Hwc HLc Hnd Hdxz Hcx Hargs Hb IHb.
       destruct IHb as (Hbk & Hfields & Hnames). split; [| split ].
       + intros z Hz. destruct (Hbk _ Hz) as [[[Hb' | Hb'] Hnr] | Hb']; [| | now right ].
         * left. split; [ left; now right | eassumption ].
         * left. split; [ now right | eassumption ].
-      + intros z Hz. rewrite rec_fields_cons in Hz. eapply in_app_or in Hz. destruct Hz as [Hz | Hz].
-        * left. constructor.
-          -- eapply occurs_free_Eapp. left. eapply in_or_app. now right.
-          -- intros Hc'. eapply Hdxz; constructor; eassumption.
-        * right. eapply Hfields. eassumption.
+      + intros z Hz. unfold rec_fields in Hz. simpl in Hz. eapply in_app_or in Hz.
+        destruct Hz as [Hz | Hz]; [ exact Hz | eapply Hfields; eassumption ].
       + intros z. simpl. split.
         * intros Hz. destruct Hz as [z Hz | z Hz]; [ inv Hz; right; now left |].
           eapply Hnames in Hz. destruct Hz; [ now left | right; now right ].
@@ -1902,7 +2223,7 @@ Section DefuncFV.
   Lemma trans_top_preserves_fv e et : trans_top L T Btop e et -> preserves_fv e et.
   Proof.
     intros (e0 & Btop' & e0' & -> & -> & HB & Hnd & Htr) z Hz.
-    destruct (proj2 trans_fv _ _ _ _ HB) as (Hbk & _ & Hnames).
+    destruct (proj2 trans_fv _ _ _ _ _ HB) as (Hbk & _ & Hnames).
     eapply occurs_free_Efun_iff in Hz. destruct Hz as [Hn Hz].
     assert (Hnc : ~ Code z).
     { intros Hc. eapply Hnames in Hc. destruct Hc as [Hc | []]. contradiction. }

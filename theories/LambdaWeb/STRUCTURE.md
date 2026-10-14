@@ -115,19 +115,29 @@ The pass runs after lambda lifting.  The source is `Efun Btop e0`, where the
 code functions `Btop` are kept unchanged (they may have free variables only if
 the program does).  A web `w` is selected when it has a lambda set `L ! w`;
 every function of a selected web must be a lambda-lifting wrapper
-`f xs = code (xs ++ zs)` of a code function (`TB_sel`), with `T ! c = (code,
-wc, |zs|)` for its tag `c`.
+`f xs = code (xs ++ zs)` of a code function (`TB_sel`), with
+`T ! c = (code, wc, |E|, args)` for its tag `c`.
 
+* **Shared environments and siblings.** All the wrappers of a bundle are
+  represented by records `C_f(E)` with the same fields `E`, the environment of
+  the bundle, which contains no wrapper of the bundle.  The extra arguments
+  `zs` of a wrapper are described by `args`: `AEnv i` is the `i`-th field of
+  `E`, and `ASib w' c'` is a sibling wrapper, whose record `C_c'(E)` is
+  rebuilt from the same fields at the call.  So mutually recursive closures
+  (wrappers capturing themselves or their siblings) are defunctionalized
+  without cyclic records.  `E` must be free in, or defined by, the bundle.
 * A bundle may mix wrappers and other functions: the other functions stay in
   an `Efun` (`fun_recs`), and rebuild the records of their wrapper siblings on
-  entry; the fields of a record must not be wrappers of the same bundle.
+  entry.
 * A call through a selected web becomes a case over the lambda set whose
-  branches project the fields into fresh variables and call the code function
-  by name; the continuation of a bound call is duplicated or put in a join
-  point (`Trans_letapp_join`).
+  branches project the fields into fresh variables, rebuild the sibling
+  records (`arg_binds`) and call the code function by name; the continuation
+  of a bound call is duplicated or put in a join point (`Trans_letapp_join`).
 * `VT_dfn` relates a wrapper closure to its record: the code closure in its
   environment is related to the target code function of the tag, and its
-  free variables to the fields.  Unselected internal closures keep their
+  extra arguments to the values rebuilt from the fields (`arg_vals`); for a
+  sibling, this is the relation of the sibling's closure and record at a
+  lower index, which the Löb induction of `V_bundle` provides.  Unselected internal closures keep their
   calling convention (`select.v`).
 * A selected call takes two steps in the source (wrapper, code) and a case,
   the projections and one call in the target: the inner call relation is
@@ -136,7 +146,8 @@ wc, |zs|)` for its tag `c`.
 
 The implementation (`dfn_impl.v`) selects the internal webs whose functions
 are all wrappers of code functions, gives every wrapper a fresh tag and
-every selected web a fresh inductive type, and checks the side conditions;
+every selected web a fresh inductive type, computes the environment of every
+bundle and the arguments of its wrappers, and checks the side conditions;
 if the check fails, it returns the program unchanged.  `dfn_top_refines`
 relates the source under the original constructor environment to the target
 under the extended one.
