@@ -706,9 +706,13 @@ Definition round (e : term.exp) (s : st) : st :=
   let s := escape (st_top s) s in
   PS.fold expose_label (st_x s) s.
 
-Definition init (e : term.exp) : st :=
-  let s := mk_st (M.empty _) (M.empty _) (M.empty _) (M.empty _) PS.empty PS.empty in
+(** The free variables of the program come from the context *)
+Definition init_from (s : st) (e : term.exp) : st :=
   fold_left (fun s x => add_v x (PS.singleton ltop) s) (PS.elements (identifiers.exp_fv e)) s.
+
+Definition empty_st : st := mk_st (M.empty _) (M.empty _) (M.empty _) (M.empty _) PS.empty PS.empty.
+
+Definition init (e : term.exp) : st := init_from empty_st e.
 
 (** ** Internal webs: the labels sharing a use site share a web *)
 
@@ -773,15 +777,35 @@ Definition sol_of (e : term.exp) (s : st) : sol * aset :=
           (AFin (st_x s)) (webs_of e s),
    AFin (st_top s)).
 
-(** The rounds of the solver, with fuel one more than the bound on the
-    measure *)
-Definition solve_loop (e : term.exp) : res st :=
+(** The rounds of the solver from [s0], with fuel one more than the bound
+    on the measure *)
+Definition solve_loop_from (e : term.exp) (s0 : st) : res st :=
   let vs := vars_acc e (identifiers.exp_fv e) in
   let Ks := PS.elements vs in
   let U := ulabels vs in
   let N := arity e in
   let fuel := N.succ_pos (ubound (N.of_nat (length Ks)) (N.of_nat (PS.cardinal U)) (N.of_nat N)) in
-  loop (round e) (fun s s' => Nat.eqb (umeasure Ks U N s') (umeasure Ks U N s)) fuel (init e).
+  loop (round e) (fun s s' => Nat.eqb (umeasure Ks U N s') (umeasure Ks U N s)) fuel s0.
+
+Definition solve_loop (e : term.exp) : res st := solve_loop_from e (init e).
+
+(** A state restricted to the universe of the program: the variables [vs],
+    their labels [U] and the arity [N] *)
+Definition restrict_set (U : PS.t) (A : PS.t) : PS.t := PS.filter (fun l => PS.mem l U) A.
+
+Definition restrict (vs U : PS.t) (N : nat) (s : st) : st :=
+  mk_st (M.map (fun k A => if PS.mem k vs then restrict_set U A else PS.empty) (st_v s))
+        (M.map (fun k l => if PS.mem k vs then map (restrict_set U) (firstn N l) else []) (st_a s))
+        (M.map (fun k l => if PS.mem k vs then map (restrict_set U) (firstn N l) else []) (st_f s))
+        (M.map (fun k A => if PS.mem k vs then restrict_set U A else PS.empty) (st_r s))
+        (restrict_set U (st_top s)) (restrict_set U (st_x s)).
+
+(** The solver from a seed (for example the result of a faster solver):
+    the seed is restricted to the universe of the program, and the rounds
+    continue from it until a fixpoint. *)
+Definition solve_seeded (e : term.exp) (seed : st) : res st :=
+  let vs := vars_acc e (identifiers.exp_fv e) in
+  solve_loop_from e (init_from (restrict vs (ulabels vs) (arity e) seed) e).
 
 Definition solve (e : term.exp) : option (sol * aset) :=
   match solve_loop e with

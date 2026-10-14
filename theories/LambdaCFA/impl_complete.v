@@ -397,9 +397,9 @@ Qed.
 
 (** * The solver always reaches a fixpoint *)
 
-Theorem solve_loop_done e : exists s, solve_loop e = Done s.
+Theorem solve_loop_from_done e s0 : exists s, solve_loop_from e s0 = Done s.
 Proof.
-  unfold solve_loop. cbv zeta.
+  unfold solve_loop_from. cbv zeta.
   set (vs := vars_acc e (identifiers.exp_fv e)). set (Ks := PS.elements vs). set (U := ulabels vs).
   pose proof (umeasure_bound Ks U (arity e)) as Hb.
   pose proof (umeasure_mono Ks U (arity e)) as Hm.
@@ -410,6 +410,9 @@ Proof.
   - rewrite succ_pos_to_nat, ubound_to_nat.
     eapply Nat.lt_le_trans with (m := S h); [ lia |]. rewrite Eh. apply le_n.
 Qed.
+
+Theorem solve_loop_done e : exists s, solve_loop e = Done s.
+Proof. eapply solve_loop_from_done. Qed.
 
 Theorem solve_some e : exists r, solve e = Some r.
 Proof.
@@ -895,16 +898,25 @@ Section StepInv.
 
 End StepInv.
 
-Lemma init_inv e : inv (vars_acc e (identifiers.exp_fv e)) (arity e) (init e).
+Lemma init_from_inv e s :
+  inv (vars_acc e (identifiers.exp_fv e)) (arity e) s ->
+  inv (vars_acc e (identifiers.exp_fv e)) (arity e) (init_from s e).
 Proof.
-  unfold init. destruct (vars_acc_spec e (identifiers.exp_fv e)) as [Hfv _].
-  eapply fold_left_inv.
-  - intros s x Hs Hx. eapply add_v_inv; eauto; [| eapply sok_single; exact I ].
-    eapply Hfv, elements_In. exact Hx.
-  - constructor; intros; simpl;
-      try (unfold gv, gl, getd; rewrite M.gempty);
-      try (eapply sok_empty || eapply lok_nil || PSD.fsetdec || reflexivity).
+  intros Hs. unfold init_from. destruct (vars_acc_spec e (identifiers.exp_fv e)) as [Hfv _].
+  eapply fold_left_inv; [| exact Hs ].
+  intros s' x Hs' Hx. eapply add_v_inv; eauto; [| eapply sok_single; exact I ].
+  eapply Hfv, elements_In. exact Hx.
 Qed.
+
+Lemma empty_inv V N : inv V N empty_st.
+Proof.
+  constructor; intros; simpl;
+    try (unfold gv, gl, getd; rewrite M.gempty);
+    try (eapply sok_empty || eapply lok_nil || PSD.fsetdec || reflexivity).
+Qed.
+
+Lemma init_inv e : inv (vars_acc e (identifiers.exp_fv e)) (arity e) (init e).
+Proof. eapply init_from_inv, empty_inv. Qed.
 
 (** * An unchanged measure means a fixpoint *)
 
@@ -1029,20 +1041,26 @@ End LoopInv.
 
 (** The final state of the solver is a fixpoint of a round, reached from the
     initial state. *)
+Theorem solve_loop_from_fix e s0 S :
+  inv (vars_acc e (identifiers.exp_fv e)) (arity e) s0 ->
+  solve_loop_from e s0 = Done S ->
+  exists s, le_st s0 s /\ le_st s S /\ le_st S s /\ S = round e s.
+Proof.
+  unfold solve_loop_from. cbv zeta. intros Hi0 H.
+  set (V := vars_acc e (identifiers.exp_fv e)) in *.
+  destruct (vars_acc_spec e (identifiers.exp_fv e)) as [_ He]. fold V in He.
+  eapply loop_done_inv with (P := fun s => inv V (arity e) s /\ le_st s0 s) in H.
+  - destruct H as (s & [Hi Hl] & -> & Hs). eapply Nat.eqb_eq in Hs.
+    exists s. split; [ exact Hl | split; [ eapply round_le | ] ]. split; [| reflexivity ].
+    eapply fix_le; [ eapply round_inv; eauto | eapply round_le | symmetry; exact Hs ].
+  - intros s [Hi Hl]. split; [ eapply round_inv; eauto | eapply le_trans; [ exact Hl | eapply round_le ] ].
+  - split; [ exact Hi0 | eapply le_refl ].
+Qed.
+
 Theorem solve_loop_fix e S :
   solve_loop e = Done S ->
   exists s0, le_st (init e) s0 /\ le_st s0 S /\ le_st S s0 /\ S = round e s0.
-Proof.
-  unfold solve_loop. cbv zeta. intros H.
-  set (V := vars_acc e (identifiers.exp_fv e)) in *.
-  destruct (vars_acc_spec e (identifiers.exp_fv e)) as [_ He]. fold V in He.
-  eapply loop_done_inv with (P := fun s => inv V (arity e) s /\ le_st (init e) s) in H.
-  - destruct H as (s0 & [Hi Hl] & -> & Hs). eapply Nat.eqb_eq in Hs.
-    exists s0. split; [ exact Hl | split; [ eapply round_le | ] ]. split; [| reflexivity ].
-    eapply fix_le; [ eapply round_inv; eauto | eapply round_le | symmetry; exact Hs ].
-  - intros s [Hi Hl]. split; [ eapply round_inv; eauto | eapply le_trans; [ exact Hl | eapply round_le ] ].
-  - split; [ eapply init_inv | eapply le_refl ].
-Qed.
+Proof. intros H. eapply solve_loop_from_fix; [ eapply init_inv | exact H ]. Qed.
 
 (** * The constraints satisfied by a fixpoint *)
 
@@ -1458,10 +1476,10 @@ Section Constraints.
         * intros l Hl. eapply (le_f _ _ HSl) in Hl. rewrite nth_overflow in Hl by lia. PSD.fsetdec.
   Qed.
 
-  Lemma init_C e :
-    le_st (init e) S -> forall x, List.In x (PS.elements (identifiers.exp_fv e)) -> PS.In ltop (vS x).
+  Lemma init_C e b :
+    le_st (init_from b e) S -> forall x, List.In x (PS.elements (identifiers.exp_fv e)) -> PS.In ltop (vS x).
   Proof.
-    intros Hi x Hx. unfold init in Hi.
+    intros Hi x Hx. unfold init_from in Hi.
     match type of Hi with
     | le_st (fold_left ?g ?l ?s0) _ =>
         destruct (fold_left_mid g (fun _ _ => add_v_le _ _ _) l s0 x Hx) as (sx & _ & H2)
@@ -1471,16 +1489,23 @@ Section Constraints.
 
 End Constraints.
 
+Theorem solve_loop_from_C e b S :
+  inv (vars_acc e (identifiers.exp_fv e)) (arity e) b ->
+  solve_loop_from e (init_from b e) = Done S ->
+  C S TTop e /\ escS S (st_top S) /\ labels_cl S /\
+  (forall x, List.In x (PS.elements (identifiers.exp_fv e)) -> PS.In ltop (vS S x)).
+Proof.
+  intros Hb H. destruct (solve_loop_from_fix e _ S (init_from_inv e b Hb) H) as (s0 & Hi & H1 & H2 & Heq).
+  edestruct (round_C S e s0) as (Hc & Ht & Hl); [ exact H2 | rewrite <- Heq; eapply le_refl |].
+  split; [ exact Hc | split; [ exact Ht | split; [ exact Hl |] ] ].
+  eapply (init_C S e b). eapply le_trans; eauto.
+Qed.
+
 Theorem solve_loop_C e S :
   solve_loop e = Done S ->
   C S TTop e /\ escS S (st_top S) /\ labels_cl S /\
   (forall x, List.In x (PS.elements (identifiers.exp_fv e)) -> PS.In ltop (vS S x)).
-Proof.
-  intros H. destruct (solve_loop_fix e S H) as (s0 & Hi & H1 & H2 & Heq).
-  edestruct (round_C S e s0) as (Hc & Ht & Hl); [ exact H2 | rewrite <- Heq; eapply le_refl |].
-  split; [ exact Hc | split; [ exact Ht | split; [ exact Hl |] ] ].
-  eapply init_C. eapply le_trans; eauto.
-Qed.
+Proof. intros H. eapply (solve_loop_from_C e empty_st); [ eapply empty_inv | exact H ]. Qed.
 
 (** * Merging makes the internal labels of a use site share a web *)
 
@@ -1832,4 +1857,81 @@ Theorem analyze_solve w_con e : exists s R, solve e = Some (s, R) /\ analyze w_c
 Proof.
   destruct (solve_some e) as [[s R] Hs]. exists s, R. split; [ exact Hs |].
   unfold analyze. rewrite Hs, (check_solve w_con e s R Hs). reflexivity.
+Qed.
+
+(** * The solver from a seed *)
+
+Lemma ulabels_sound V l : PS.In l (ulabels V) -> lab_in V l.
+Proof.
+  unfold ulabels. rewrite PS.fold_spec.
+  assert (Hg : forall xs U0, (forall x, List.In x xs -> PS.In x V) -> (forall l, PS.In l U0 -> lab_in V l) ->
+                        PS.In l (fold_left (fun U x => PS.add (lfun x) (PS.add (lcon x) U)) xs U0) -> lab_in V l).
+  { induction xs as [| a xs IH]; intros U0 Hxs HU0 Hl; simpl in *; [ eauto |].
+    eapply IH; [ intros; eapply Hxs; now right | | exact Hl ].
+    intros l' Hl'. apply PS.add_spec in Hl' as [-> | Hl']; [ eapply Hxs; now left |].
+    apply PS.add_spec in Hl' as [-> | Hl']; [ eapply Hxs; now left | eauto ]. }
+  eapply Hg.
+  - intros x Hx. eapply elements_In. exact Hx.
+  - intros l' Hl'. apply PS.singleton_spec in Hl'. subst. exact I.
+Qed.
+
+Lemma restrict_set_sok V A : sok V (restrict_set (ulabels V) A).
+Proof.
+  intros l Hl. unfold restrict_set in Hl. apply PS.filter_spec in Hl as [_ Hl]; [| intros ? ? ->; reflexivity ].
+  eapply ulabels_sound. eapply PS.mem_spec. exact Hl.
+Qed.
+
+Lemma restrict_inv V N s : inv V N (restrict V (ulabels V) N s).
+Proof.
+  assert (Hset : forall (m : M.t PS.t) k,
+             sok V (gv (M.map (fun k A => if PS.mem k V then restrict_set (ulabels V) A else PS.empty) m) k) /\
+             (~ PS.In k V -> PS.Subset (gv (M.map (fun k A => if PS.mem k V then restrict_set (ulabels V) A else PS.empty) m) k) PS.empty)).
+  { intros m k. unfold gv, getd. rewrite M.gmap. destruct (M.get k m) as [A |]; simpl.
+    - destruct (PS.mem k V) eqn:Hk; split.
+      + eapply restrict_set_sok.
+      + intros Hn. exfalso. apply Hn. eapply PS.mem_spec. exact Hk.
+      + eapply sok_empty.
+      + intros _. PSD.fsetdec.
+    - split; [ eapply sok_empty | intros _; PSD.fsetdec ]. }
+  assert (Hlist : forall (m : M.t (list PS.t)) k,
+             lok V N (gl (M.map (fun k l => if PS.mem k V then map (restrict_set (ulabels V)) (firstn N l) else []) m) k) /\
+             (~ PS.In k V -> gl (M.map (fun k l => if PS.mem k V then map (restrict_set (ulabels V)) (firstn N l) else []) m) k = [])).
+  { intros m k. unfold gl, getd. rewrite M.gmap. destruct (M.get k m) as [l |]; simpl.
+    - destruct (PS.mem k V) eqn:Hk; split.
+      + split; [ rewrite length_map, length_firstn; lia |].
+        intros i. destruct (Nat.lt_ge_cases i (length (map (restrict_set (ulabels V)) (firstn N l)))) as [Hi | Hi].
+        * eapply nth_In in Hi. eapply in_map_iff in Hi as (A & HA & _).
+          rewrite <- HA. eapply restrict_set_sok.
+        * rewrite nth_overflow by lia. eapply sok_empty.
+      + intros Hn. exfalso. apply Hn. eapply PS.mem_spec. exact Hk.
+      + eapply lok_nil.
+      + reflexivity.
+    - split; [ eapply lok_nil | reflexivity ]. }
+  constructor; simpl; intros; try eapply Hset; try eapply Hlist; eauto; eapply restrict_set_sok.
+Qed.
+
+Theorem solve_seeded_done e seed : exists S, solve_seeded e seed = Done S.
+Proof. eapply solve_loop_from_done. Qed.
+
+(** From any seed, the solution passes the check. *)
+Theorem check_seeded w_con e seed S :
+  solve_seeded e seed = Done S ->
+  check w_con (fst (sol_of e S)) (snd (sol_of e S)) e = true.
+Proof.
+  unfold solve_seeded. cbv zeta. intros Hl.
+  change (check w_con (sol0 e S) (AFin (st_top S)) e = true).
+  destruct (solve_loop_from_C e _ S (restrict_inv _ _ _) Hl) as (Hc & Ht & Hlab & Hfv).
+  assert (Hw : sites_ok e S (sites e)).
+  { intros fn y Hy l1 l2 H1 Hk1 Hx1 H2 Hk2 Hx2.
+    rewrite !webs_of_spec by (eapply all_labels_in; eassumption).
+    destruct (merge_done S (sites e) (all_labels S)) as [iw Hiw]. rewrite Hiw.
+    assert (Hd : forall l, PS.In l (gv (st_v S) y) -> kind fn l = true -> ~ PS.In l (st_x S) ->
+                           PS.In l (PS.diff (kind_labels fn (gv (st_v S) y)) (st_x S))).
+    { intros l Hl' Hk Hx. eapply PS.diff_spec. split; [ eapply kind_labels_spec; eauto | exact Hx ]. }
+    eapply merge_fix; eauto using all_labels_in. }
+  unfold check. repeat (eapply andb_true_intro; split).
+  - eapply labels_b_ok. exact Hlab.
+  - eapply esc_b_sol. exact Ht.
+  - eapply (chk_ok w_con e S e TTop); eauto.
+  - eapply forallb_forall. intros x Hx. rewrite fl_sol. simpl. eapply PS.mem_spec. eauto.
 Qed.

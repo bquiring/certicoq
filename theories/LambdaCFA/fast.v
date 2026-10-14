@@ -23,18 +23,19 @@
    call, its arguments).  The labels at a use site that is not hot yet are
    recorded, so that exposing one of them later heats the site.
 
-   Internal webs are computed by union-find over the labels of each use
-   site.
-
-   The solution is checked as before ([check_spec]), so the analysis is
-   correct whatever the solver does ([annotate_fast_correct]). *)
+   The worklist only seeds the rounds of [impl.v], which continue from it
+   until a fixpoint (one round when the worklist is right).  The rounds are
+   proven to finish and their result to pass the checker ([check_seeded]),
+   so the analysis is correct ([annotate_fast_correct]) and never falls back
+   to the trivial solution ([analyze_fast_solved]), whatever the worklist
+   computes. *)
 
 From Stdlib Require Import NArith.BinNat Lists.List Bool.
 Require Import compcert.lib.Coqlib.
 From CertiRocq.LambdaANF Require Import set_util algebra.
 From CertiRocq.LambdaANF Require term identifiers.
 From CertiRocq.LambdaWeb Require Import syntax anno.
-From CertiRocq.LambdaCFA Require Import spec sound impl.
+From CertiRocq.LambdaCFA Require Import spec sound impl impl_complete.
 
 Import ListNotations.
 Local Open Scope nat_scope.
@@ -301,41 +302,7 @@ Definition init_fs (e : term.exp) : fs :=
   let s := add_edge NTop NEsc s in
   fold_left (fun s x => push (NV x) (PS.singleton ltop) s) (PS.elements (identifiers.exp_fv e)) s.
 
-(** * Internal webs: union-find over the labels of each use site *)
-
-Record uf : Type := mk_uf { uf_parent : M.t positive; uf_size : M.t positive }.
-
-Fixpoint uf_find (fuel : nat) (u : uf) (l : lab) : lab :=
-  match fuel with
-  | O => l
-  | S fuel =>
-      match M.get l (uf_parent u) with
-      | Some p => if Pos.eqb p l then l else uf_find fuel u p
-      | None => l
-      end
-  end.
-
-Definition uf_union (fuel : nat) (u : uf) (l1 l2 : lab) : uf :=
-  let r1 := uf_find fuel u l1 in
-  let r2 := uf_find fuel u l2 in
-  if Pos.eqb r1 r2 then u else
-    let s1 := getd (uf_size u) 1%positive r1 in
-    let s2 := getd (uf_size u) 1%positive r2 in
-    (* the smaller tree goes under the larger one, so trees stay shallow *)
-    let '(r, c) := if Pos.leb s2 s1 then (r1, r2) else (r2, r1) in
-    mk_uf (M.set c r (uf_parent u)) (M.set r (s1 + s2)%positive (uf_size u)).
-
-Definition fast_webs (s : fs) (ls : list lab) : M.t positive :=
-  let fuel := 64 in
-  let u := M.fold (fun u _ site =>
-                     let '(fn, y, _) := site in
-                     match PS.elements (PS.diff (kind_labels fn (gv (f_v s) y)) (f_x s)) with
-                     | [] => u
-                     | l :: K => fold_left (fun u l' => uf_union fuel u l l') K u
-                     end) (f_site s) (mk_uf (M.empty _) (M.empty _)) in
-  fold_left (fun m l => M.set l (uf_find fuel u l) m) ls (M.empty _).
-
-(** * The solution *)
+(** * The seed *)
 
 Definition lists_of (len : M.t nat) (m : M.t (M.t PS.t)) : M.t (list PS.t) :=
   M.map (fun g n => map (fun i => gl2 m g i) (range 0 n)) len.
@@ -343,23 +310,14 @@ Definition lists_of (len : M.t nat) (m : M.t (M.t PS.t)) : M.t (list PS.t) :=
 Definition st_of (s : fs) : st :=
   mk_st (f_v s) (lists_of (f_alen s) (f_a s)) (lists_of (f_flen s) (f_f s)) (f_r s) (f_top s) (f_x s).
 
-Definition sol_of_fs (s : fs) : sol * aset :=
-  let t := st_of s in
-  let iw := fast_webs s (all_labels t) in
-  (mk_sol (M.map1 AFin (st_v t)) (AFin PS.empty)
-          (M.map1 (map AFin) (st_a t)) AAll
-          (M.map1 (map AFin) (st_f t)) (AFin PS.empty)
-          (M.map1 AFin (st_r t)) (AFin PS.empty)
-          (AFin (st_x t)) iw,
-   AFin (st_top t)).
-
 (** Fuel: one change per step, up to 2^50 steps *)
 Definition fast_fuel : positive := Pos.pow 2 50.
 
-Definition solve_fast (e : term.exp) : option (sol * aset) :=
+(** The state reached by the worklist; it is only a seed, so running out of
+    fuel is not a problem. *)
+Definition fast_seed (e : term.exp) : st :=
   match loop step1 (fun _ s' => match f_wl s' with [] => true | _ => false end) fast_fuel (init_fs e) with
-  | Done s => Some (sol_of_fs s)
-  | More _ => None
+  | Done s | More s => st_of s
   end.
 
 (** * The analysis *)
@@ -369,10 +327,13 @@ Section Analysis.
   Variable (w_con : web).
   Hypothesis (Hw_con : exposedb w_con = true).
 
+  (** The rounds of [impl.v] continue from the seed until a fixpoint, so the
+      result is a fixpoint whatever the worklist computed; when the worklist
+      is right, this takes one round. *)
   Definition analyze_fast (e : term.exp) : sol * aset :=
-    match solve_fast e with
-    | Some (s, R) => if check w_con s R e then (s, R) else (triv, AAll)
-    | None => (triv, AAll)
+    match solve_seeded e (fast_seed e) with
+    | Done fin => let '(s, R) := sol_of e fin in if check w_con s R e then (s, R) else (triv, AAll)
+    | More _ => (triv, AAll)
     end.
 
   Definition annotate_fast (e : term.exp) : exp :=
@@ -380,8 +341,18 @@ Section Analysis.
 
   Lemma analyze_fast_ok e : let '(s, R) := analyze_fast e in ok_top w_con s R e (anno w_con s e).
   Proof.
-    unfold analyze_fast. destruct (solve_fast e) as [[s R] |]; [| eapply triv_top ].
+    unfold analyze_fast. destruct (solve_seeded e (fast_seed e)) as [fin | fin]; [| eapply triv_top ].
+    destruct (sol_of e fin) as [s R].
     destruct (check w_con s R e) eqn:Hc; [ eapply check_spec; eauto | eapply triv_top ].
+  Qed.
+
+  (** The analysis never falls back to the trivial solution. *)
+  Theorem analyze_fast_solved e :
+    exists fin, solve_seeded e (fast_seed e) = Done fin /\ analyze_fast e = sol_of e fin.
+  Proof.
+    destruct (solve_seeded_done e (fast_seed e)) as [fin HS]. exists fin. split; [ exact HS |].
+    unfold analyze_fast. rewrite HS. pose proof (check_seeded w_con e (fast_seed e) fin HS) as Hc.
+    destruct (sol_of e fin) as [s R]. simpl in Hc. rewrite Hc. reflexivity.
   Qed.
 
   Context {fuel : Type} {Hf : @fuel_resource fuel} {trace : Type} {Ht : @trace_resource trace}.
