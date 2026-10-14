@@ -151,7 +151,7 @@ Section Check.
       | AFin a =>
           match List.find is_flab (PS.elements a) with
           | Some (xO g) => wfun g t
-          | _ => Exposed t
+          | _ => Internal 1 (* no function reaches the call *)
           end
       | AAll => Exposed t
       end.
@@ -561,7 +561,6 @@ Fixpoint step (cur : tgt) (e : term.exp) (s : st) : st :=
   | term.Econstr x c ys e =>
       let s := add_v x (PS.singleton (lcon x)) s in
       let s := fold_i (fun s i y => add_f x i (gv (st_v s) y) s) 0 ys s in
-      let s := if PS.mem (lcon x) (st_x s) then fold_left (fun s A => escape A s) (gl (st_f s) x) s else s in
       step cur e s
   | term.Ecase y cl =>
       let s := fst (use_site false y s) in
@@ -591,8 +590,6 @@ with step_fds (B : term.fundefs) (s : st) : st :=
   match B with
   | term.Fcons g t xs b B =>
       let s := add_v g (PS.singleton (lfun g)) s in
-      let exg := PS.mem (lfun g) (st_x s) in
-      let s := if exg then escape (gv (st_r s) g) (expose_args g (length xs) s) else s in
       let s := fold_i (fun s i x => add_v x (nth i (gl (st_a s) g) PS.empty) (add_a g i PS.empty s)) 0 xs s in
       step_fds B (step (TRet g) b s)
   | term.Fnil => s
@@ -693,9 +690,20 @@ Definition umeasure (Ks : list var) (U : PS.t) (N : nat) (s : st) : nat :=
 Definition ubound (nk nu na : N) : N :=
   (nk * nu + nk * (na + na * nu) + nk * (na + na * nu) + nk * nu + nu + nu)%N.
 
+(** Exposed labels: the arguments of exposed functions come from the
+    context, and their results and the fields of exposed constructors
+    escape. *)
+Definition expose_label (l : lab) (s : st) : st :=
+  match l with
+  | xO g => escape (gv (st_r s) g) (expose_args g (length (gl (st_a s) g)) s)
+  | xI z => fold_left (fun s A => escape A s) (gl (st_f s) z) s
+  | xH => s
+  end.
+
 Definition round (e : term.exp) (s : st) : st :=
   let s := step TTop e s in
-  escape (st_top s) s.
+  let s := escape (st_top s) s in
+  PS.fold expose_label (st_x s) s.
 
 Definition init (e : term.exp) : st :=
   let s := mk_st (M.empty _) (M.empty _) (M.empty _) (M.empty _) PS.empty PS.empty in
@@ -705,7 +713,8 @@ Definition init (e : term.exp) : st :=
 
 Fixpoint sites (e : term.exp) : list (bool * var) :=
   match e with
-  | term.Econstr _ _ _ e | term.Eproj _ _ _ _ e | term.Eprim_val _ _ e | term.Eprim _ _ _ e => sites e
+  | term.Econstr _ _ _ e | term.Eprim_val _ _ e | term.Eprim _ _ _ e => sites e
+  | term.Eproj _ _ _ y e => (false, y) :: sites e
   | term.Ecase y cl =>
       (false, y) ::
       (fix sites_br (cl : list (term.ctor_tag * term.exp)) :=

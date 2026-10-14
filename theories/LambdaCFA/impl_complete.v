@@ -248,8 +248,6 @@ Qed.
 Ltac step_fds_body IHb IHB :=
   peel ltac:(eapply IHB); peel ltac:(eapply IHb);
   peel ltac:(eapply fold_i_le; intros; peel ltac:(eapply add_v_le); eapply add_a_le);
-  peel ltac:(destruct (PS.mem _ _);
-             [ peel ltac:(eapply escape_le); eapply expose_args_le | eapply le_refl ]);
   eapply add_v_le.
 
 Lemma step_le : forall e cur s, le_st s (step cur e s).
@@ -259,7 +257,6 @@ Proof.
       intros; simpl.
     + (* constr *)
       match goal with IH : forall cur s, le_st s (step cur ?e s) |- _ => peel ltac:(eapply IH) end.
-      peel ltac:(destruct (PS.mem _ _); [ eapply fold_left_le; intros; eapply escape_le | eapply le_refl ]).
       peel ltac:(eapply fold_i_le; intros; eapply add_f_le).
       eapply add_v_le.
     + (* case *)
@@ -289,8 +286,18 @@ Proof.
     + eapply le_refl.
 Qed.
 
+Lemma expose_label_le l s : le_st s (expose_label l s).
+Proof.
+  destruct l; simpl; [ | | eapply le_refl ].
+  - eapply fold_left_le. intros; eapply escape_le.
+  - peel ltac:(eapply escape_le). eapply expose_args_le.
+Qed.
+
 Lemma round_le e s : le_st s (round e s).
-Proof. unfold round. eapply le_trans; [ eapply step_le | eapply escape_le ]. Qed.
+Proof.
+  unfold round. peel ltac:(eapply ps_fold_le; intros; eapply expose_label_le).
+  peel ltac:(eapply escape_le). eapply step_le.
+Qed.
 
 (** * The measure grows with the state and is bounded *)
 
