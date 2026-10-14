@@ -23,70 +23,7 @@ Import ListNotations.
 (** * Preliminaries *)
 
 (** Mutual induction on expressions and bundles *)
-Lemma exp_fundefs_ind (P : exp -> Prop) (Q : fundefs -> Prop) :
-  (forall x w t ys e, P e -> P (Econstr x w t ys e)) ->
-  (forall x w, P (Ecase x w nil)) ->
-  (forall x w cl c e, P e -> P (Ecase x w cl) -> P (Ecase x w ((c, e) :: cl))) ->
-  (forall x w t n y e, P e -> P (Eproj x w t n y e)) ->
-  (forall x f w ys e, P e -> P (Eletapp x f w ys e)) ->
-  (forall B e, Q B -> P e -> P (Efun B e)) ->
-  (forall f w ys, P (Eapp f w ys)) ->
-  (forall x p e, P e -> P (Eprim_val x p e)) ->
-  (forall x p ys e, P e -> P (Eprim x p ys e)) ->
-  (forall x, P (Ehalt x)) ->
-  (forall f w xs e B, P e -> Q B -> Q (Fcons f w xs e B)) ->
-  Q Fnil ->
-  (forall e, P e) /\ (forall B, Q B).
-Proof.
-  intros H1 H2 H3 H4 H5 H6 H7 H8 H9 H10 H11 H12.
-  refine (conj
-            (fix Fe (e : exp) : P e :=
-               match e with
-               | Econstr x w t ys k => H1 x w t ys k (Fe k)
-               | Ecase x w cl =>
-                   (fix Fcl (cl : list (ctor_tag * exp)) : P (Ecase x w cl) :=
-                      match cl with
-                      | [] => H2 x w
-                      | (c, k) :: cl' => H3 x w cl' c k (Fe k) (Fcl cl')
-                      end) cl
-               | Eproj x w t n y k => H4 x w t n y k (Fe k)
-               | Eletapp x f w ys k => H5 x f w ys k (Fe k)
-               | Efun B k => H6 B k (Fb B) (Fe k)
-               | Eapp f w ys => H7 f w ys
-               | Eprim_val x p k => H8 x p k (Fe k)
-               | Eprim x p ys k => H9 x p ys k (Fe k)
-               | Ehalt x => H10 x
-               end
-             with Fb (B : fundefs) : Q B :=
-               match B with
-               | Fcons f w xs k B' => H11 f w xs k B' (Fe k) (Fb B')
-               | Fnil => H12
-               end
-             for Fe)
-            (fix Fe (e : exp) : P e :=
-               match e with
-               | Econstr x w t ys k => H1 x w t ys k (Fe k)
-               | Ecase x w cl =>
-                   (fix Fcl (cl : list (ctor_tag * exp)) : P (Ecase x w cl) :=
-                      match cl with
-                      | [] => H2 x w
-                      | (c, k) :: cl' => H3 x w cl' c k (Fe k) (Fcl cl')
-                      end) cl
-               | Eproj x w t n y k => H4 x w t n y k (Fe k)
-               | Eletapp x f w ys k => H5 x f w ys k (Fe k)
-               | Efun B k => H6 B k (Fb B) (Fe k)
-               | Eapp f w ys => H7 f w ys
-               | Eprim_val x p k => H8 x p k (Fe k)
-               | Eprim x p ys k => H9 x p ys k (Fe k)
-               | Ehalt x => H10 x
-               end
-             with Fb (B : fundefs) : Q B :=
-               match B with
-               | Fcons f w xs k B' => H11 f w xs k B' (Fe k) (Fb B')
-               | Fnil => H12
-               end
-             for Fb)).
-Qed.
+
 
 (** Free variables, computed by CertiRocq's [exp_fv] *)
 Definition is_free (e : exp) (z : var) : bool := PS.mem z (identifiers.exp_fv (erase e)).

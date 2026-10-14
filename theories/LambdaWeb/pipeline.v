@@ -60,10 +60,12 @@ Section Pipeline.
 
   (** The cross-language relations, at fixed postconditions *)
   Context (Pa PGa : PostT_a) (HPa : Post_properties_a cenv Pa PGa) (HPa_ub : post_a_upper_bound Pa).
-  Context (Pe PGe : PostT_e) (HPe : Post_properties_e cenv Pe Pe PGe) (HPe_ub : post_e_upper_bound Pe).
+  (** The function tags of erasure; exposed webs keep their λANF tag *)
+  Context (tagf : web -> nat -> term.fun_tag) (Htag : forall t n, tagf (Exposed t) n = t).
+  Context (Pe PGe : PostT_e) (HPe : Post_properties_e cenv tagf Pe Pe PGe) (HPe_ub : post_e_upper_bound Pe).
 
   Definition anno_rel := E_anno_top cenv w_con Pa PGa.
-  Definition erase_rel := E_erase_top cenv Pe PGe.
+  Definition erase_rel := E_erase_top cenv tagf Pe PGe.
 
   (** The relation of the whole pipeline *)
   Definition pipeline_rel (n1 n2 n3 : nat) : term.exp -> term.exp -> Prop :=
@@ -144,7 +146,7 @@ Section Pipeline.
     pose proof (E_anno_refines cenv w_con Pa PGa HPa_ub e1 e2 Hc1 H12) as [Ht12 Hd12].
     pose proof (web_exp_n_refines cenv preserves_fv web_post_prop (fun _ _ H => H)
                                   (fun P PG H => proj2 H) n2 e2 e3 Hc2 H23) as [Ht23 Hd23].
-    pose proof (E_erase_refines cenv Pe PGe HPe_ub e3 e4 Hc3 H34) as [Ht34 Hd34].
+    pose proof (E_erase_refines cenv tagf Pe PGe HPe_ub e3 e4 Hc3 H34) as [Ht34 Hd34].
     pose proof (anf_n_refines _ _ _ Hc4 H45) as [Ht45 Hd45].
     split.
     - intros v0 c0 t0 Hs.
@@ -227,18 +229,18 @@ Section Pipeline.
                (Hweb : forall e, exists n, web_n n e (web_opt e)).
 
     Definition compile (e : term.exp) : term.exp :=
-      anf_opt2 (erase (web_opt (annotate (anf_opt1 e)))).
+      anf_opt2 (erase_t tagf (web_opt (annotate (anf_opt1 e)))).
 
     Lemma compile_pipeline_rel e : exists n1 n2 n3, pipeline_rel n1 n2 n3 e (compile e).
     Proof.
       destruct (Hopt1 e) as [n1 H1].
       destruct (Hweb (annotate (anf_opt1 e))) as [n2 H2].
-      destruct (Hopt2 (erase (web_opt (annotate (anf_opt1 e))))) as [n3 H3].
+      destruct (Hopt2 (erase_t tagf (web_opt (annotate (anf_opt1 e))))) as [n3 H3].
       exists n1, n2, n3.
       exists (anf_opt1 e). split; [ exact H1 |].
       exists (annotate (anf_opt1 e)). split; [ apply Hanno |].
       exists (web_opt (annotate (anf_opt1 e))). split; [ exact H2 |].
-      exists (erase (web_opt (annotate (anf_opt1 e)))). split; [ eapply erase_correct; eauto | exact H3 ].
+      exists (erase_t tagf (web_opt (annotate (anf_opt1 e)))). split; [ eapply erase_correct; eauto | exact H3 ].
     Qed.
 
     Theorem compile_refines e :

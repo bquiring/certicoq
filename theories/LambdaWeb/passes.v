@@ -169,9 +169,12 @@ Section Compiler.
   Variable (w_con : web).
   Hypothesis (Hw_con : exposedb w_con = true).
 
+  (** The function tags of erasure *)
+  Variable (tagf : web -> nat -> term.fun_tag).
+
   Variables (Pa PGa : @PostT_a fuel trace) (Pe PGe : @PostT_e fuel trace).
   Hypotheses (HPa_ub : post_a_upper_bound Pa) (HPe_ub : post_e_upper_bound Pe).
-  Hypotheses (HPe : forall cenv, Post_properties_e cenv Pe Pe PGe).
+  Hypotheses (HPe : forall cenv, Post_properties_e cenv tagf Pe Pe PGe).
 
   Hypotheses (Hopt1 : forall cenv e, exists n, anf_n cenv n e (anf_opt1 cenv e))
              (Hopt2 : forall cenv e, exists n, anf_n cenv n e (anf_opt2 cenv e))
@@ -181,7 +184,7 @@ Section Compiler.
       the program. *)
   Definition compile (cenv : term.ctor_env) (e : term.exp) : term.ctor_env * term.exp :=
     let '(cenv', e3) := web_opt cenv (annotate cenv (anf_opt1 cenv e)) in
-    (cenv', anf_opt2 cenv' (erase e3)).
+    (cenv', anf_opt2 cenv' (erase_t tagf e3)).
 
   Theorem compile_refines cenv e :
     identifiers.closed_exp e ->
@@ -200,8 +203,8 @@ Section Compiler.
     destruct (web_opt cenv e2) as [cenv' e3]. destruct Hw as [Hext H23].
     destruct (Hopt1 cenv e) as [n1 H01]. fold e1 in H01.
     pose proof (Hanno cenv e1) as H12. fold e2 in H12.
-    pose proof (HPe cenv') as HPe'. pose proof (erase_correct cenv' Pe PGe e3) as H34.
-    destruct (Hopt2 cenv' (erase e3)) as [n3 H45].
+    pose proof (HPe cenv') as HPe'. pose proof (erase_correct cenv' tagf Pe PGe e3) as H34.
+    destruct (Hopt2 cenv' (erase_t tagf e3)) as [n3 H45].
     split; [ exact Hext |].
     assert (Hc1 : identifiers.closed_exp e1)
       by (eapply anf_closed; eauto; eapply anf_n_preserves_fv; eauto).
@@ -209,14 +212,14 @@ Section Compiler.
     { split; [| sets ]. eapply Included_trans; [ eapply H12 | eapply Hc1 ]. }
     assert (Hc3 : closed_exp e3).
     { eapply closed_preserves_fv; eauto. eapply web_n_preserves_fv; eauto. }
-    assert (Hc4 : identifiers.closed_exp (erase e3)).
+    assert (Hc4 : identifiers.closed_exp (erase_t tagf e3)).
     { split; [| sets ]. eapply Included_trans; [ eapply H34 | eapply Hc3 ]. }
     pose proof (anf_n_refines _ _ _ _ Hc H01) as [Ht01 Hd01].
     pose proof (E_anno_refines cenv w_con Pa PGa HPa_ub e1 e2 Hc1 H12) as [Ht12 Hd12].
     pose proof (refines_cenv_ext cenv cenv' e2 Hext) as [Htx Hdx].
     pose proof (web_exp_n_refines cenv' preserves_fv (web_post_prop cenv') (fun _ _ H => H)
                                   (fun P PG H => proj2 H) 3 e2 e3 Hc2 H23) as [Ht23 Hd23].
-    pose proof (E_erase_refines cenv' Pe PGe HPe_ub e3 (erase e3) Hc3 H34) as [Ht34 Hd34].
+    pose proof (E_erase_refines cenv' tagf Pe PGe HPe_ub e3 (erase_t tagf e3) Hc3 H34) as [Ht34 Hd34].
     pose proof (anf_n_refines _ _ _ _ Hc4 H45) as [Ht45 Hd45].
     split.
     - intros v0 c0 t0 Hs.

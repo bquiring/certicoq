@@ -32,7 +32,7 @@ Open Scope alg_scope.
 Definition P_eq_e : @PostT_e fuel trace :=
   fun p1 p2 => let '(_, _, c1, _) := p1 in let '(_, _, c2, _) := p2 in c1 = c2.
 
-Lemma P_eq_e_properties cenv : Post_properties_e cenv P_eq_e P_eq_e P_eq_e.
+Lemma P_eq_e_properties cenv tagf : Post_properties_e cenv tagf P_eq_e P_eq_e P_eq_e.
 Proof.
   constructor; try (intros c1 c2 H; exact H);
     unfold P_eq_e; repeat intro; simpl in *; subst; reflexivity.
@@ -59,7 +59,7 @@ Section Compiler.
              (Hopt2 : forall cenv e, exists n, anf_n cenv n e (anf_opt2 cenv e)).
 
   Definition compile_cfa (cenv : term.ctor_env) (e : term.exp) : term.ctor_env * term.exp :=
-    compile anf_opt1 anf_opt2 (fun _ => annotate w_con) cenv e.
+    compile anf_opt1 anf_opt2 (fun _ => annotate w_con) (fun w _ => web_tag w) cenv e.
 
   Theorem compile_cfa_refines cenv e :
     identifiers.closed_exp e ->
@@ -72,8 +72,8 @@ Section Compiler.
           ANF.value_ref v1 v2) /\
     (CertiRocq.LambdaANF.eval.diverge cenv ANF.emp e -> CertiRocq.LambdaANF.eval.diverge cenv' ANF.emp e5).
   Proof.
-    eapply (compile_refines anf_opt1 anf_opt2 (fun _ => annotate w_con) w_con P_eq P_eq P_eq_e P_eq_e
-                            P_eq_upper_bound P_eq_e_upper_bound P_eq_e_properties Hopt1 Hopt2).
+    eapply (compile_refines anf_opt1 anf_opt2 (fun _ => annotate w_con) w_con (fun w _ => web_tag w) P_eq P_eq P_eq_e P_eq_e
+                            P_eq_upper_bound P_eq_e_upper_bound (fun cenv => P_eq_e_properties cenv _) Hopt1 Hopt2).
     intros cenv' e'. eapply annotate_correct. exact Hw_con.
   Qed.
 

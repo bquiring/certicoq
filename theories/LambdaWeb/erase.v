@@ -31,9 +31,108 @@ Notation aRes := (@CertiRocq.LambdaANF.eval.Res term.val).
 Notation abstep := CertiRocq.LambdaANF.eval.bstep.
 Notation abstep_fuel := CertiRocq.LambdaANF.eval.bstep_fuel.
 
+(** * Erasure with a tag function
+
+    [erase] maps a function web to its index.  The compiler instead gives a
+    fresh function tag to each internal web and arity ([retag.v]); erasure
+    with a tag function [tagf] covers both.  A call and the function it
+    calls share a web and, when the call succeeds, an arity, so they agree
+    on the tag. *)
+
+Section EraseT.
+
+  Variable (tagf : web -> nat -> term.fun_tag).
+
+  Fixpoint erase_t (e : exp) : term.exp :=
+    match e with
+    | Econstr x w t ys e => term.Econstr x t ys (erase_t e)
+    | Ecase x w cl =>
+        term.Ecase x ((fix erase_t_branches (cl : list (ctor_tag * exp)) :=
+                         match cl with
+                         | [] => []
+                         | (c, e) :: cl => (c, erase_t e) :: erase_t_branches cl
+                         end) cl)
+    | Eproj x w t n y e => term.Eproj x t n y (erase_t e)
+    | Eletapp x f w ys e => term.Eletapp x f (tagf w (length ys)) ys (erase_t e)
+    | Efun B e => term.Efun (erase_t_fundefs B) (erase_t e)
+    | Eapp f w ys => term.Eapp f (tagf w (length ys)) ys
+    | Eprim_val x p e => term.Eprim_val x p (erase_t e)
+    | Eprim x p ys e => term.Eprim x p ys (erase_t e)
+    | Ehalt x => term.Ehalt x
+    end
+  with erase_t_fundefs (B : fundefs) : term.fundefs :=
+    match B with
+    | Fcons f w xs e B => term.Fcons f (tagf w (length xs)) xs (erase_t e) (erase_t_fundefs B)
+    | Fnil => term.Fnil
+    end.
+
+  Definition erase_t_branches (cl : list (ctor_tag * exp)) : list (ctor_tag * term.exp) :=
+    map (fun '(c, e) => (c, erase_t e)) cl.
+
+  Lemma erase_t_branches_inline cl :
+    (fix erase_t_branches (cl : list (ctor_tag * exp)) :=
+       match cl with
+       | [] => []
+       | (c, e) :: cl => (c, erase_t e) :: erase_t_branches cl
+       end) cl = erase_t_branches cl.
+  Proof. induction cl as [| [c e] cl IH]; simpl; congruence. Qed.
+
+  Lemma name_in_fundefs_erase_t B :
+    identifiers.name_in_fundefs (erase_t_fundefs B) <--> name_in_fundefs B.
+  Proof. induction B; simpl; [ rewrite IHB |]; reflexivity. Qed.
+
+  Lemma find_def_erase_t f B w xs e :
+    find_def f B = Some (w, xs, e) ->
+    term.find_def f (erase_t_fundefs B) = Some (tagf w (length xs), xs, erase_t e).
+  Proof.
+    induction B; simpl; intros H; try congruence.
+    destruct (M.elt_eq f v); subst; eauto. inv H; reflexivity.
+  Qed.
+
+  (** Tags do not change free variables *)
+  Lemma occurs_free_erase_t :
+    (forall e, identifiers.occurs_free (erase_t e) <--> occurs_free e) /\
+    (forall B, identifiers.occurs_free_fundefs (erase_t_fundefs B) <--> occurs_free_fundefs B).
+  Proof.
+    unfold occurs_free, occurs_free_fundefs.
+    eapply exp_fundefs_ind; intros; simpl;
+      repeat match goal with
+             | |- context [ identifiers.occurs_free (term.Econstr _ _ _ _) ] => rewrite identifiers.occurs_free_Econstr
+             | |- context [ identifiers.occurs_free (term.Eproj _ _ _ _ _) ] => rewrite identifiers.occurs_free_Eproj
+             | |- context [ identifiers.occurs_free (term.Ecase _ []) ] => rewrite identifiers.occurs_free_Ecase_nil
+             | |- context [ identifiers.occurs_free (term.Ecase _ (_ :: _)) ] => rewrite identifiers.occurs_free_Ecase_cons
+             | |- context [ identifiers.occurs_free (term.Eletapp _ _ _ _ _) ] => rewrite identifiers.occurs_free_Eletapp
+             | |- context [ identifiers.occurs_free (term.Efun _ _) ] => rewrite identifiers.occurs_free_Efun
+             | |- context [ identifiers.occurs_free (term.Eapp _ _ _) ] => rewrite identifiers.occurs_free_Eapp
+             | |- context [ identifiers.occurs_free (term.Eprim_val _ _ _) ] => rewrite identifiers.occurs_free_Eprim_val
+             | |- context [ identifiers.occurs_free (term.Eprim _ _ _ _) ] => rewrite identifiers.occurs_free_Eprim
+             | |- context [ identifiers.occurs_free (term.Ehalt _) ] => rewrite identifiers.occurs_free_Ehalt
+             | |- context [ identifiers.occurs_free_fundefs (term.Fcons _ _ _ _ _) ] => rewrite identifiers.occurs_free_fundefs_Fcons
+             | |- context [ identifiers.occurs_free_fundefs term.Fnil ] => rewrite identifiers.occurs_free_fundefs_Fnil
+             end;
+      repeat match goal with
+             | H : _ <--> _ |- _ => rewrite H; clear H
+             end;
+      try reflexivity.
+    all: rewrite name_in_fundefs_erase_t, <- name_in_fundefs_erase; reflexivity.
+  Qed.
+
+End EraseT.
+
+Lemma erase_t_web_tag :
+  (forall e, erase_t (fun w _ => web_tag w) e = erase e) /\
+  (forall B, erase_t_fundefs (fun w _ => web_tag w) B = erase_fundefs B).
+Proof.
+  eapply exp_fundefs_ind; intros; simpl; try congruence.
+  - inv H0. reflexivity.
+Qed.
+
 Section Erase.
 
   Variable (cenv : term.ctor_env).
+
+  (** The function tags of the λANF side *)
+  Variable (tagf : web -> nat -> term.fun_tag).
 
   Context {fuel : Type} {Hf : @fuel_resource fuel} {trace : Type} {Ht : @trace_resource trace}.
 
@@ -71,7 +170,7 @@ Section Erase.
           find_def f1 B1 = Some (w, xs1, e1) ->
           Some rho1' = set_lists xs1 vs1 (def_funs B1 B1 rho1 rho1) ->
           exists xs2 e2 rho2',
-            term.find_def f2 B2 = Some (web_tag w, xs2, e2) /\
+            term.find_def f2 B2 = Some (tagf w (length xs1), xs2, e2) /\
             Some rho2' = set_lists xs2 vs2 (term.def_funs B2 B2 rho2 rho2) /\
             (j < k ->
              (exposedb w = true -> Forall exposed_val vs1) ->
@@ -245,13 +344,13 @@ Section Erase.
   Qed.
 
   Lemma name_in_fundefs_erase' B x :
-    identifiers.name_in_fundefs (erase_fundefs B) x <-> name_in_fundefs B x.
-  Proof. split; intros H; eapply name_in_fundefs_erase; eauto. Qed.
+    identifiers.name_in_fundefs (erase_t_fundefs tagf B) x <-> name_in_fundefs B x.
+  Proof. split; intros H; eapply name_in_fundefs_erase_t; eauto. Qed.
 
   Lemma def_funs_erase_eq B0 B rho0 rho x :
     name_in_fundefs B x ->
-    M.get x (term.def_funs (erase_fundefs B0) (erase_fundefs B) rho0 rho) =
-    Some (term.Vfun rho0 (erase_fundefs B0) x).
+    M.get x (term.def_funs (erase_t_fundefs tagf B0) (erase_t_fundefs tagf B) rho0 rho) =
+    Some (term.Vfun rho0 (erase_t_fundefs tagf B0) x).
   Proof.
     induction B; simpl; intros Hn; inv Hn.
     - inv H. rewrite M.gss; reflexivity.
@@ -261,7 +360,7 @@ Section Erase.
 
   Lemma def_funs_erase_neq B0 B rho0 rho x :
     ~ name_in_fundefs B x ->
-    M.get x (term.def_funs (erase_fundefs B0) (erase_fundefs B) rho0 rho) = M.get x rho.
+    M.get x (term.def_funs (erase_t_fundefs tagf B0) (erase_t_fundefs tagf B) rho0 rho) = M.get x rho.
   Proof.
     induction B; simpl; intros Hn; eauto.
     rewrite M.gso; [ eapply IHB | ]; intros Hc; eapply Hn; [ right | left ]; eauto.
@@ -270,8 +369,8 @@ Section Erase.
 
   Lemma G_e_def_funs PG k S rho1 rho2 B rhoc1 rhoc2 :
     G_e PG k (Setminus _ S (name_in_fundefs B)) rho1 rho2 ->
-    (forall f, name_in_fundefs B f -> V_e PG k (Vfun rhoc1 B f) (term.Vfun rhoc2 (erase_fundefs B) f)) ->
-    G_e PG k S (def_funs B B rhoc1 rho1) (term.def_funs (erase_fundefs B) (erase_fundefs B) rhoc2 rho2).
+    (forall f, name_in_fundefs B f -> V_e PG k (Vfun rhoc1 B f) (term.Vfun rhoc2 (erase_t_fundefs tagf B) f)) ->
+    G_e PG k S (def_funs B B rhoc1 rho1) (term.def_funs (erase_t_fundefs tagf B) (erase_t_fundefs tagf B) rhoc2 rho2).
   Proof.
     intros HG Hfuns x Hx v1 Hget.
     destruct (name_in_fundefs_dec B x) as [Hin | Hnin].
@@ -333,7 +432,7 @@ Section Erase.
       set_lists xs vs (def_funs B B rhoc1 rhoc1) = Some rhoc1' ->
       PG (e1, rhoc1', c1, cout1) (e2, rhoc2, c2, cout2) ->
       P (Eapp f w ys, rho1, c1 <+> one_w (Eapp f w ys), cout1 <+> one_w (Eapp f w ys))
-        (term.Eapp f (web_tag w) ys, rho2, c2 <+> one (term.Eapp f (web_tag w) ys), cout2 <+> one (term.Eapp f (web_tag w) ys)).
+        (term.Eapp f (tagf w (length ys)) ys, rho2, c2 <+> one (term.Eapp f (tagf w (length ys)) ys), cout2 <+> one (term.Eapp f (tagf w (length ys)) ys)).
 
   Definition post_e_letapp (P1 P2 PG : PostT_e) :=
     forall x f f' w ys e1 rho1 e2 rho2 xs e_b1 v1 e_b2 v2
@@ -346,7 +445,7 @@ Section Erase.
       PG (e_b1, rhoc1', c1, cout1) (e_b2, rhoc2, c2, cout2) ->
       P1 (e1, M.set x v1 rho1, c1', cout1') (e2, M.set x v2 rho2, c2', cout2') ->
       P2 (Eletapp x f w ys e1, rho1, c1 <+> c1' <+> one_w (Eletapp x f w ys e1), cout1 <+> cout1' <+> one_w (Eletapp x f w ys e1))
-         (term.Eletapp x f' (web_tag w) ys e2, rho2, c2 <+> c2' <+> one (term.Eletapp x f' (web_tag w) ys e2), cout2 <+> cout2' <+> one (term.Eletapp x f' (web_tag w) ys e2)).
+         (term.Eletapp x f' (tagf w (length ys)) ys e2, rho2, c2 <+> c2' <+> one (term.Eletapp x f' (tagf w (length ys)) ys e2), cout2 <+> cout2' <+> one (term.Eletapp x f' (tagf w (length ys)) ys e2)).
 
   Definition post_e_letapp_OOT (P2 PG : PostT_e) :=
     forall x f f' w ys e1 rho1 e2 rho2 xs e_b1 e_b2 rhoc1 rhoc2 B h vs rhoc1' c1 c2 cout1 cout2,
@@ -356,7 +455,7 @@ Section Erase.
       set_lists xs vs (def_funs B B rhoc1 rhoc1) = Some rhoc1' ->
       PG (e_b1, rhoc1', c1, cout1) (e_b2, rhoc2, c2, cout2) ->
       P2 (Eletapp x f w ys e1, rho1, c1 <+> one_w (Eletapp x f w ys e1), cout1 <+> one_w (Eletapp x f w ys e1))
-         (term.Eletapp x f' (web_tag w) ys e2, rho2, c2 <+> one (term.Eletapp x f' (web_tag w) ys e2), cout2 <+> one (term.Eletapp x f' (web_tag w) ys e2)).
+         (term.Eletapp x f' (tagf w (length ys)) ys e2, rho2, c2 <+> one (term.Eletapp x f' (tagf w (length ys)) ys e2), cout2 <+> one (term.Eletapp x f' (tagf w (length ys)) ys e2)).
 
   Class Post_properties_e (P1 P2 PG : PostT_e) : Prop :=
     { HPe_con : post_e_constr P1 P2;
@@ -386,8 +485,8 @@ Section Erase.
 
   (** ** Fundamental property of erasure *)
 
-  Lemma one_w_one e : one_w e = one (erase e).
-  Proof. reflexivity. Qed.
+  Lemma one_w_one e : one_w e = one (erase_t tagf e).
+  Proof. destruct e; reflexivity. Qed.
 
   Ltac fuel_arith :=
     repeat match goal with
@@ -400,16 +499,10 @@ Section Erase.
            end; lia.
 
   Lemma find_tag_nth_erase cl t e n :
-    find_tag_nth cl t e n -> term_util.find_tag_nth (erase_branches cl) t (erase e) n.
+    find_tag_nth cl t e n -> term_util.find_tag_nth (erase_t_branches tagf cl) t (erase_t tagf e) n.
   Proof. intros H; induction H; simpl; constructor; eauto. Qed.
 
-  Lemma erase_branches_inline cl :
-    (fix erase_branches (cl : list (ctor_tag * exp)) :=
-       match cl with
-       | [] => []
-       | (c, e) :: cl => (c, erase e) :: erase_branches cl
-       end) cl = erase_branches cl.
-  Proof. induction cl as [| [c e] cl IH]; simpl; congruence. Qed.
+
 
   Section Compat.
 
@@ -583,11 +676,25 @@ Section Erase.
       + eapply R_e_mono; eauto. fuel_arith.
   Qed.
 
+  (** The tag of the called function is the tag of the call: they have the
+      same web, and the call succeeds, so the same arity *)
+  Ltac fix_tag ys :=
+    match goal with
+    | Hf2 : term.find_def _ _ = Some (tagf ?w (length ?xs1), _, _),
+      Hs : set_lists ?xs1 ?vs _ = Some _,
+      Hg : get_list ys _ = Some ?vs |- _ =>
+        let Hl := fresh "Hl" in
+        assert (Hl : length xs1 = length ys)
+          by (transitivity (length vs); [ eapply set_lists_length_eq; exact Hs
+                                        | symmetry; eapply get_list_length_eq; exact Hg ]);
+        rewrite Hl in Hf2
+    end.
+
   Lemma E_e_app_compat ex k rho1 rho2 f w ys
         (Hcompat : post_e_app P2 PG) (HOOT : post_e_OOT P2) :
     var_rel k rho1 rho2 f f ->
     Forall (fun y => var_rel k rho1 rho2 y y) ys ->
-    E P2 ex k (Eapp f w ys, rho1) (term.Eapp f (web_tag w) ys, rho2).
+    E P2 ex k (Eapp f w ys, rho1) (term.Eapp f (tagf w (length ys)) ys, rho2).
   Proof.
     intros Hfun Hall r1 cin cout Hleq Hstep. inv Hstep.
     - exists aOOT, cin, <0>. split; [ constructor; eassumption |].
@@ -598,7 +705,7 @@ Section Erase.
       destruct v2; try contradiction.
       edestruct (Hv vs vs2 (k - 1)) as (xs2 & e2 & rho2' & Hf2 & Hset2 & Hbody); eauto.
       + eapply Forall2_length; eauto.
-      + edestruct Hbody as (r2 & cin' & cout' & Hstep2 & Hpost & HR);
+      + fix_tag ys. edestruct Hbody as (r2 & cin' & cout' & Hstep2 & Hpost & HR);
           [ fuel_arith | eassumption | | | eassumption | ].
         * eapply V_e_mono_Forall2; eauto. lia.
         * fuel_arith.
@@ -615,7 +722,7 @@ Section Erase.
     Forall (fun y => var_rel k rho1 rho2 y y) ys ->
     (forall m v1 v2, m < k -> (exposedb w = true -> exposed_val v1) -> V m v1 v2 ->
                      E P1 ex m (e1, M.set x v1 rho1) (e2, M.set x v2 rho2)) ->
-    E P2 ex k (Eletapp x f w ys e1, rho1) (term.Eletapp x f' (web_tag w) ys e2, rho2).
+    E P2 ex k (Eletapp x f w ys e1, rho1) (term.Eletapp x f' (tagf w (length ys)) ys e2, rho2).
   Proof.
     intros Hfun Hall Hk r1 cin cout Hleq Hstep. inv Hstep.
     - exists aOOT, cin, <0>. split; [ constructor; eassumption |].
@@ -625,7 +732,7 @@ Section Erase.
          edestruct var_rel_e_get_list as (vs2 & Hgetl2 & Hvs); eauto;
          destruct v2; try contradiction;
          edestruct (Hv vs vs2 (k - 1)) as (xs2 & eb2 & rho2' & Hf2 & Hset2 & Hbody); eauto;
-         [ eapply Forall2_length; eauto | ]).
+         [ eapply Forall2_length; eauto | fix_tag ys ]).
       + edestruct Hbody as (r2 & cin' & cout' & Hstep2 & Hpost & HR);
           [ fuel_arith | eassumption | | | eassumption | ].
         * eapply V_e_mono_Forall2; eauto. lia.
@@ -663,24 +770,24 @@ Section Erase.
     - eapply IHys. intros z Hz. eapply Hsub. now right.
   Qed.
 
-  Lemma erase_branches_tags cl :
-    Forall2 (fun p p' => fst p = fst p') (erase_branches cl) (erase_branches cl).
+  Lemma erase_t_branches_tags cl :
+    Forall2 (fun p p' => fst p = fst p') (erase_branches cl) (erase_t_branches tagf cl).
   Proof. induction cl as [| [c e] cl IH]; simpl; constructor; eauto. Qed.
 
   Lemma V_e_fun_erase k rho1 rho2 B f :
     (forall m ex e rho1 rho2,
         m < k ->
         G_e PG m (occurs_free e) rho1 rho2 ->
-        E_e PG P ex m (e, rho1) (erase e, rho2)) ->
+        E_e PG P ex m (e, rho1) (erase_t tagf e, rho2)) ->
     G_e PG k (occurs_free_fundefs B) rho1 rho2 ->
     name_in_fundefs B f ->
-    V_e PG k (Vfun rho1 B f) (term.Vfun rho2 (erase_fundefs B) f).
+    V_e PG k (Vfun rho1 B f) (term.Vfun rho2 (erase_t_fundefs tagf B) f).
   Proof.
     revert f. induction k as [k IHk] using lt_wf_rec. intros f Hexp HG Hin.
     rewrite V_e_eq. unfold V_e_, V_e_fun. cbn -[E_e'].
     intros vs1 vs2 j w xs1 e1 rho1' Hlen Hfind Hset.
-    pose proof (find_def_erase _ _ _ _ _ Hfind) as Hfind'.
-    edestruct (set_lists_length3 (term.def_funs (erase_fundefs B) (erase_fundefs B) rho2 rho2) xs1 vs2)
+    pose proof (find_def_erase_t tagf _ _ _ _ _ Hfind) as Hfind'.
+    edestruct (set_lists_length3 (term.def_funs (erase_t_fundefs tagf B) (erase_t_fundefs tagf B) rho2 rho2) xs1 vs2)
       as [rho2' Hset2].
     { rewrite <- Hlen. eapply set_lists_length_eq. symmetry; eauto. }
     do 3 eexists. split; [ eassumption | split; [ symmetry; eassumption |] ].
@@ -699,7 +806,7 @@ Section Erase.
 
   Lemma erase_fundamental k ex e rho1 rho2 :
     G_e PG k (occurs_free e) rho1 rho2 ->
-    E_e PG P ex k (e, rho1) (erase e, rho2).
+    E_e PG P ex k (e, rho1) (erase_t tagf e, rho2).
   Proof.
     revert ex e rho1 rho2.
     induction k as [k IH] using lt_wf_rec.
@@ -712,15 +819,15 @@ Section Erase.
         * eapply G_e_set; eauto. eapply G_e_antimon. eapply G_e_mono; eauto. lia.
           normalize_occurs_free. sets.
     - eapply E_e_case_nil_compat; eauto.
-    - simpl. rewrite erase_branches_inline.
+    - simpl. rewrite (erase_t_branches_inline tagf).
       eapply E_e_case_cons_compat; eauto.
-      + eapply erase_branches_tags.
+      + eapply erase_t_branches_tags.
       + eapply HG. fv_mem.
       + intros m Hlt. eapply IHe.
         * intros. eapply IH; eauto. lia.
         * eapply G_e_antimon. eapply G_e_mono; eauto. lia.
           normalize_occurs_free. sets.
-      + rewrite <- erase_branches_inline. eapply IHe0; eauto.
+      + rewrite <- (erase_t_branches_inline tagf). eapply IHe0; eauto.
         eapply G_e_antimon; eauto. normalize_occurs_free. sets.
     - eapply E_e_proj_compat; eauto.
       + eapply HG. fv_mem.
@@ -763,9 +870,9 @@ Section Erase.
       term_util.binding_in_map (occurs_free e1) rho1 ->
       E_e PG P true k (e1, rho1) (e2, rho2).
 
-  Theorem erase_correct e : E_erase_top P PG e (erase e).
+  Theorem erase_correct e : E_erase_top P PG e (erase_t tagf e).
   Proof.
-    split; [ reflexivity |].
+    split; [ eapply (proj1 ((proj1 (occurs_free_erase_t tagf)) e)) |].
     intros k rho1 rho2 HG Hbind. eapply erase_fundamental; eauto.
   Qed.
 
@@ -832,6 +939,9 @@ Section Erase.
 
   Variable (lft : term.fun_tag).
 
+  (** Exposed webs keep their λANF tag *)
+  Hypothesis (Htag : forall t n, tagf (Exposed t) n = t).
+
   Theorem E_erase_preserves_linking x e1 e2 e1' e2' :
     closed_exp e1 ->
     occurs_free e1' \subset [set x] ->
@@ -846,6 +956,14 @@ Section Erase.
       intros z Hz. eapply Hc2 in Hz. inv Hz. }
     intros k rho1 rho2 HG Hbind.
     unfold CertiRocq.LambdaANF.rel_comp.link, link_w, link.
+    (* the tag of the λANF link function is the tag of its exposed web *)
+    match goal with
+    | |- context [ term.Efun (term.Fcons ?g lft [] ?b term.Fnil) (term.Eletapp ?y ?h lft [] ?k) ] =>
+        replace (term.Efun (term.Fcons g lft [] b term.Fnil) (term.Eletapp y h lft [] k))
+          with (term.Efun (term.Fcons g (tagf (Exposed lft) (length (@nil var))) [] b term.Fnil)
+                          (term.Eletapp y h (tagf (Exposed lft) (length (@nil var))) [] k))
+          by (rewrite Htag; reflexivity)
+    end.
     eapply E_e_fun_compat; eauto.
     eapply E_e_letapp_compat; eauto.
     - intros v1 Hget. simpl in Hget. rewrite M.gss in Hget. inv Hget.
