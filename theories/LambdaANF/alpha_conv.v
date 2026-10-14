@@ -125,6 +125,11 @@ Inductive Alpha_conv :
       ~ x' \in image f (occurs_free e) :|: bound_var e ->
       Alpha_conv e e' (f {x ~> x'}) ->
       Alpha_conv (Eprim x p ys e) (Eprim x' p ys' e') f
+| Alpha_Eprim_val :
+    forall x x' p e e' f,
+      ~ x' \in image f (occurs_free e) :|: bound_var e ->
+      Alpha_conv e e' (f {x ~> x'}) ->
+      Alpha_conv (Eprim_val x p e) (Eprim_val x' p e') f
 | Alpha_Efun :
     forall B B' e e' f f',
       Disjoint _ (name_in_fundefs B') (image f (occurs_free (Efun B e)) :|: bound_var (Efun B e)) ->
@@ -276,7 +281,11 @@ Proof.
     eapply Forall2_monotonic; [| eassumption ].
     intros x1 x2 Heq. rewrite H1. eassumption.
   - inv H'; constructor; eauto.
+    + match goal with Heq : f_eq _ _ |- _ => rewrite <- Heq; eassumption end.
+    + eapply H; eauto. symmetry. eapply f_eq_extend. eassumption.
   - inv H'; constructor; eauto.
+    + match goal with Heq : f_eq _ _ |- _ => rewrite Heq; eassumption end.
+    + eapply H; eauto. eapply f_eq_extend. eassumption.
   - inv H'; constructor; eauto.
     + eapply Forall2_monotonic; [| eassumption ].
       intros x1 x2 Heq. rewrite <- H2. eassumption.
@@ -709,6 +718,18 @@ Proof with now sets.
   - rewrite !image_Union. rewrite image_Singleton.
     eapply Forall2_map in H4. subst.
     rewrite FromList_map_image_FromList. reflexivity.
+  - assert (Hinj' : injective_subdomain (v |: occurs_free e) (g {v ~> x'})).
+    { eapply injective_subdomain_extend'.
+      - rewrite Setminus_Union_distr.
+        rewrite Setminus_Same_set_Empty_set, Union_Empty_set_neut_l.
+        eapply injective_subdomain_antimon. eassumption.
+        normalize_occurs_free...
+      - intros Hc. match goal with Hn : ~ x' \in _ |- _ => eapply Hn end.
+        left. eapply image_monotonic; [| eassumption ]. sets. }
+    match goal with Ha : Alpha_conv e _ _ |- _ => pose proof (IHe _ _ Ha) as Hfv end.
+    rewrite <- Hfv.
+    * eapply image_extend_injective_subdomain. eassumption.
+    * eapply injective_subdomain_antimon; eauto...
   - rewrite !image_Union.
     assert (Hinj' : injective_subdomain (v |: occurs_free e) (g {v ~> x'})).
     { eapply injective_subdomain_extend'.
@@ -1702,6 +1723,7 @@ Section Alpha_conv_correct.
       intros x y Hin1 Hin2 Heq. specialize (Henv x).
       rewrite Heq in Henv. eapply Henv.
       now constructor.
+    - eapply preord_exp_prim_val_compat; eauto.
     - eapply preord_exp_prim_compat; eauto; intros.
       + eapply Forall2_monotonic_strong; [| eassumption ].
         intros x y Hin1 Hin2 Heq. specialize (Henv x).
