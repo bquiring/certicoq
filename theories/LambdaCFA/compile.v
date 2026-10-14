@@ -92,4 +92,32 @@ Section Compiler.
     - eapply annotate_correct; eauto.
   Qed.
 
+  (** Linking does not require both units to use this analysis: the
+      library or the client may be annotated by any analysis proven against
+      [E_anno_top] at the same interface ([w_con], [Exposed t] for exposed
+      functions) and postconditions, e.g. a context-sensitive one. *)
+  Theorem annotate_links_with_lib cenv lft x e1 e1' e2' :
+    identifiers.closed_exp e1 ->
+    identifiers.occurs_free e1' \subset [set x] ->
+    E_anno_top cenv w_con P_eq P_eq e1' e2' ->
+    E_anno_top cenv w_con P_eq P_eq (CertiRocq.LambdaANF.rel_comp.link lft x e1 e1')
+               (link_w lft x (annotate w_con e1) e2').
+  Proof.
+    intros Hc Hfv H'. eapply E_anno_preserves_linking; eauto.
+    - eapply P_eq_properties.
+    - eapply annotate_correct; eauto.
+  Qed.
+
+  Theorem annotate_links_with_client cenv lft x e1 e2 e1' :
+    identifiers.closed_exp e1 ->
+    identifiers.occurs_free e1' \subset [set x] ->
+    E_anno_top cenv w_con P_eq P_eq e1 e2 ->
+    E_anno_top cenv w_con P_eq P_eq (CertiRocq.LambdaANF.rel_comp.link lft x e1 e1')
+               (link_w lft x e2 (annotate w_con e1')).
+  Proof.
+    intros Hc Hfv H. eapply E_anno_preserves_linking; eauto.
+    - eapply P_eq_properties.
+    - eapply annotate_correct; eauto.
+  Qed.
+
 End Compiler.

@@ -13,7 +13,7 @@ open, and it is linked against unknown code.
 | `spec.v` | Labels, abstract values (sets of labels, possibly infinite), solutions, and the constraints `ok`/`ok_top` that relate a λANF program to its annotation |
 | `sound.v` | The step-indexed cross-language relation indexed by abstract values; import/export with the interface relation `V_a`; the fundamental property; `ok_top_E_anno`: the constraints imply `E_anno_top`; the postcondition `P_eq` (equal fuel) and its obligations |
 | `impl.v` | The annotation of a solution (`anno`), a checker proven sound (`check_spec`), the trivial solution (`triv_top`), the solver, and `annotate` with `annotate_correct` |
-| `compile.v` | The compiler of `LambdaWeb/passes.v` with this analysis (`compile_cfa_refines`, assuming only the λANF optimizations); linking of separately annotated units (`annotate_preserves_linking`) |
+| `compile.v` | The compiler of `LambdaWeb/passes.v` with this analysis (`compile_cfa_refines`, assuming only the λANF optimizations); linking of separately annotated units (`annotate_preserves_linking`), including with units annotated by any other analysis proven against `E_anno_top` (`annotate_links_with_lib`, `annotate_links_with_client`) |
 
 Main results: `ok_top_E_anno` (sound.v), `annotate_correct` (impl.v),
 `compile_cfa_refines` and `annotate_preserves_linking` (compile.v).
@@ -72,6 +72,18 @@ on the step index and the constraints, with Löb induction for the closures of
 a bundle (`V_clo`) and a shared lemma for calls (`call_rel`).  The annotation
 does not change the steps of the program, so both programs use the same fuel
 (`P_eq`).
+
+## Compositionality
+
+The 0-CFA's relation `V` (indexed by abstract sets) is internal to
+`sound.v`.  At the boundary of a unit it is converted to the
+analysis-independent interface relation `V_a` (`V_import`, `V_export`), so
+the result `E_anno_top` mentions nothing about the analysis.  A unit annotated
+by this analysis therefore links with a unit annotated by any other analysis,
+such as a k-CFA, proven against `E_anno_top` at the same interface: exposed
+constructors at `w_con`, exposed functions at `Exposed t`, and the same
+postconditions (`P_eq`).  Internal webs never cross the boundary, so the two
+analyses need not coordinate their internal web names.
 
 ## The implementation
 
