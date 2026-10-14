@@ -718,7 +718,10 @@ Qed.
 
 (** * The implementation *)
 
-Definition dfn_thr : nat := 10.
+(** Continuations are never duplicated: a duplicated continuation would
+    duplicate its bindings, and the rest of the compiler expects unique
+    bindings. *)
+Definition dfn_thr : nat := 0.
 
 (** The largest index of an internal web of a program: the join points get a
     fresh internal web above it. *)

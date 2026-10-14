@@ -24,7 +24,7 @@ From CertiRocq.LambdaANF Require Import Ensembles_util List_util tactics algebra
 From CertiRocq.LambdaANF Require term term_util identifiers bounds.
 From CertiRocq.LambdaANF Require eval rel_comp.
 From CertiRocq.LambdaWeb Require Import syntax semantics exposed post compat bound indep refl comp
-     dpe dpe_impl cp cp_impl defunc dfn_impl erase anno pipeline.
+     dpe dpe_impl cp cp_impl ar ar_impl defunc dfn_impl erase anno pipeline.
 
 Import ListNotations.
 
@@ -58,6 +58,12 @@ Section Steps.
   Proof.
     econstructor; [ eapply cp_top_correct | | eapply dead_bound_web_post ].
     eapply (proj1 (cp.trans_occurs_free (choose_map e) (esize e))). eapply cp_top_trans.
+  Qed.
+
+  Theorem ar_web_n e : web_n cenv 1 e (ar_top e).
+  Proof.
+    econstructor; [ eapply ar_top_correct | | eapply dead_bound_web_post ].
+    eapply (proj1 (ar.trans_occurs_free (ar_choose e))). eapply ar_top_trans.
   Qed.
 
   (** The specification of defunctionalization, given its hypotheses *)

@@ -113,6 +113,8 @@ LambdaWeb/dpe.v
 LambdaWeb/dpe_impl.v
 LambdaWeb/cp.v
 LambdaWeb/cp_impl.v
+LambdaWeb/ar.v
+LambdaWeb/ar_impl.v
 LambdaWeb/defunc.v
 LambdaWeb/dfn_impl.v
 LambdaWeb/erase.v
@@ -121,6 +123,7 @@ LambdaWeb/pipeline.v
 LambdaWeb/passes.v
 LambdaWeb/retag.v
 LambdaWeb/stats.v
+LambdaWeb/hoist.v
 
 # LambdaCFA: a compositional 0-CFA annotating λANF with webs
 LambdaCFA/spec.v

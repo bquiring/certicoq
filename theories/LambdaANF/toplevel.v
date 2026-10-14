@@ -3,9 +3,10 @@ Require Import Common.
 From CertiRocq Require Import
      LambdaANF.term LambdaANF.term_util LambdaANF.state LambdaANF.eval LambdaANF.shrink_cps
      LambdaANF.inline LambdaANF.uncurry_proto LambdaANF.closure_conversion
-     LambdaANF.closure_conversion LambdaANF.hoisting LambdaANF.dead_param_elim LambdaANF.lambda_lifting.
+     LambdaANF.closure_conversion LambdaANF.hoisting LambdaANF.dead_param_elim LambdaANF.lambda_lifting
+     LambdaANF.freshen.
 From CertiRocq.LambdaBox_to_LambdaANF Require Import common.
-From CertiRocq.LambdaWeb Require syntax retag dpe_impl cp_impl stats.
+From CertiRocq.LambdaWeb Require syntax retag dpe_impl cp_impl ar ar_impl dfn_impl hoist stats.
 From MetaRocq.Utils Require MRString.
 From CertiRocq.LambdaCFA Require impl fast.
 From CertiRocq.LambdaBox_to_LambdaANF Require anf cps.
@@ -205,20 +206,64 @@ Section IDENT.
   (** Web optimizations: annotate the program with webs by the 0-CFA, run the
       λweb passes, and erase the webs, with fresh function tags for the
       internal webs. *)
+  Definition fd_count (B : LambdaWeb.syntax.fundefs) : N :=
+    N.of_nat (length (LambdaWeb.dfn_impl.fd_list B)).
+
+  (** What defunctionalization finds: the hoisted functions, the wrappers it
+      gives a tag, and the webs it selects *)
+  Definition dfn_stats (cenv : ctor_env) (e : LambdaWeb.syntax.exp) : string :=
+    match e with
+    | LambdaWeb.syntax.Efun Btop e0 =>
+        let r := LambdaWeb.dfn_impl.analyze_dfn cenv Btop e0 in
+        ("top functions " ++ show_N (fd_count Btop) ++ ", wrappers " ++
+         show_N (N.of_nat (length (M.elements (LambdaWeb.dfn_impl.r_tagof r)))) ++ ", selected webs " ++
+         show_N (N.of_nat (length (LambdaWeb.syntax.WM_elements (LambdaWeb.dfn_impl.r_L r)))))%bs
+    | _ => "no top bundle"%bs
+    end.
+
+  Definition max_key {A} (m : M.t A) : positive :=
+    fold_left (fun acc p => Pos.max acc (fst p)) (M.elements m) 1%positive.
+
+  Definition max_ind (cenv : ctor_env) : positive :=
+    fold_left (fun acc p => Pos.max acc (ctor_ind_tag (snd p))) (M.elements cenv) 1%positive.
+
+  (** Web optimizations: hoist the closed functions, annotate the program
+      with webs by the 0-CFA, defunctionalize, run the other λweb passes, and
+      erase the webs, with fresh function tags for the internal webs. *)
   Definition web_trans : anf_trans :=
     fun e c =>
       let 'mkCompData nv nc ni nf cenv fenv names imap log := c in
+      let e := LambdaWeb.hoist.hoist e in
       let w_con := LambdaWeb.syntax.Exposed 1%positive in
       let '(sl, _) := LambdaCFA.fast.analyze_fast w_con e in
       let fallback := match LambdaCFA.spec.s_ex sl with LambdaCFA.spec.AAll => true | _ => false end in
       let e0 := LambdaCFA.impl.anno w_con sl e in
-      let e1 := LambdaWeb.dpe_impl.dpe_top e0 in
+      let dmsg := dfn_stats cenv e0 in
+      let '(cenv', ed) := LambdaWeb.dfn_impl.dfn_top cenv e0 in
+      let ndfn := (N.of_nat (length (M.elements cenv')) - N.of_nat (length (M.elements cenv)))%N in
+      let La := LambdaWeb.ar_impl.ar_choose ed in
+      let nflat := N.of_nat (length (filter (fun o : option LambdaWeb.ar.shape => match o with Some _ => true | None => false end)
+                                            (concat (map snd (LambdaWeb.syntax.WM_elements La))))) in
+      let ea := LambdaWeb.ar_impl.ar_top ed in
+      let e1 := LambdaWeb.dpe_impl.dpe_top ea in
       let ew := LambdaWeb.cp_impl.cp_top e1 in
       let msg := ("Web optimizations: " ++ (if fallback then "analysis fell back to the trivial solution; " else "") ++
                   show_stats (LambdaWeb.stats.stats_of e0) (LambdaWeb.stats.stats_of e1)
-                             (LambdaWeb.stats.stats_of ew))%bs in
+                             (LambdaWeb.stats.stats_of ew) ++
+                  "; defunc: " ++ dmsg ++ ", new constructors " ++ show_N ndfn ++
+                  "; arity raising: webs " ++ show_N (N.of_nat (length (LambdaWeb.syntax.WM_elements La))) ++
+                  ", flattened positions " ++ show_N nflat ++
+                  ", parameters " ++ show_N (LambdaWeb.stats.n_param (LambdaWeb.stats.stats_of ed)) ++ " -> " ++
+                  show_N (LambdaWeb.stats.n_param (LambdaWeb.stats.stats_of ea)) ++
+                  ", arguments " ++ show_N (LambdaWeb.stats.n_arg (LambdaWeb.stats.stats_of ed)) ++ " -> " ++
+                  show_N (LambdaWeb.stats.n_arg (LambdaWeb.stats.stats_of ea)))%bs in
       let '(e', s) := LambdaWeb.retag.erase_rt ew (LambdaWeb.retag.mk_rt (M.empty _) nf fenv) in
-      web_note msg (Ret e', mkCompData nv nc ni (LambdaWeb.retag.rt_next s) cenv (LambdaWeb.retag.rt_fenv s) names imap log).
+      let nv' := Pos.max nv (Pos.succ (identifiers.max_var e' 1%positive)) in
+      let nc' := Pos.max nc (Pos.succ (max_key cenv')) in
+      let ni' := Pos.max ni (Pos.succ (max_ind cenv')) in
+      (* the web passes may reuse names (defunctionalization does); freshen
+         the program, as the rest of the pipeline expects unique bindings *)
+      web_note msg (freshen.freshen_top e' (mkCompData nv' nc' ni' (LambdaWeb.retag.rt_next s) cenv' (LambdaWeb.retag.rt_fenv s) names imap log)).
 
   Section Pipeline.
 

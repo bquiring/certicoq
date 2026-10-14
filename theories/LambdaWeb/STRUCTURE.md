@@ -38,13 +38,18 @@ assumed in `pipeline.v`; a compositional 0-CFA inhabiting it is in
 | `dpe_impl.v` | An implementation of DPE (liveness analysis per web, dead-binding elimination) and the proof that it inhabits the relation | — |
 | `cp.v` | Flow-directed constant propagation with locally bound constants (and constant parameters), dropping dead local bindings | §6.2, Fig. 7 |
 | `cp_impl.v` | An implementation of constant propagation: an iterated analysis, the transformation, and a checker proven sound | — |
+| `ar.v` | Flow-directed arity raising (argument flattening): calls of a transformed web project the fields of flattened arguments of known shape into fresh variables, and functions rebuild the constructor on entry | — |
+| `ar_impl.v` | An implementation of arity raising: an iterated shape analysis, the transformation with fresh names above every variable of the program, and checkers proven sound (`ar_top_correct`) | — |
 | `defunc.v` | MLton-style defunctionalization of lambda-lifted programs: closures of the selected webs become records, calls become a case over the lambda set and a named call of the code function; mixed bundles; join points; correctness and refinement (incl. divergence) | §6.3 |
 | `comp.v` | Transitive closure, adequacy and linking for λweb | §7.3, Lemmas 7.5, 7.6 |
 | `dfn_impl.v` | An implementation of defunctionalization: wrapper analysis, fresh tags and inductive types for the lambda sets (extending the constructor environment), the transformation, and a checker proven sound | — |
 | `erase.v` | Cross-language erasure relation λweb → λANF; `erase` is correct; adequacy; linking | §7.4, Fig. 11, Lemmas 7.7, 7.8 |
 | `anno.v` | Cross-language annotation relation λANF → λweb (the spec of an analysis); adequacy; linking | §7.2, Fig. 10, Lemmas 7.3, 7.4 |
 | `pipeline.v` | Composition with CertiRocq's `preord_exp_n`: refinement and linking for the whole pipeline; a compiler built from correct phases is correct | §7.5, Lemmas 7.10, 7.11 |
-| `passes.v` | The implemented passes as steps of `web_exp_n` (`dpe_web_n`, `cp_web_n`, `dfn_top_web_n`); the λweb optimizer DPE ; CP ; defunc; a compiler through it, correct across the extension of the constructor environment | — |
+| `retag.v` | Erasure for the compiler: a fresh function tag per internal web and arity, recorded in the function environment (not proven yet) | — |
+| `hoist.v` | Hoisting closed (lambda-lifted) functions to one top bundle, so that defunctionalization applies (not proven yet) | — |
+| `stats.v` | Counts of functions, calls, constructors and use sites (internal or not), parameters, arguments and bindings, reported by the compiler | — |
+| `passes.v` | The implemented passes as steps of `web_exp_n` (`dpe_web_n`, `cp_web_n`, `ar_web_n`, `dfn_top_web_n`); the λweb optimizer DPE ; CP ; defunc; a compiler through it, correct across the extension of the constructor environment | — |
 
 Main results: `V_exposed_indep`, `E_top_E_web` (indep.v), `E_web_refl`
 (refl.v), `E_web_dpe`, `E_web_dpe_dead`, `dpe_refines` (dpe.v), `E_web_cp`,
@@ -107,6 +112,17 @@ make LambdaWeb/pipeline.vo LambdaWeb/dpe.vo
 * Linking for the compiler of `passes.v`: defunctionalization extends the
   constructor environment per compilation unit, so separately compiled units
   would have to agree on the new tags.
+
+## In the compiler
+
+At `-O 2`, `LambdaANF/toplevel.v` runs a web step before closure conversion
+(after lambda lifting): hoisting (`hoist.v`), the 0-CFA (`LambdaCFA/fast.v`),
+defunctionalization, arity raising, DPE and constant propagation, then the
+erasure of `retag.v` and CertiRocq's `freshen` (the web passes may reuse
+names, the rest of the pipeline expects unique bindings).  The compiler
+prints what each pass did.  CertiRocq's top-level correctness theorems
+assume this step is off; covering it needs the correctness of hoisting and
+retagging in CertiRocq's relation.
 
 ## Defunctionalization (`defunc.v`)
 

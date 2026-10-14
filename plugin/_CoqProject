@@ -541,3 +541,15 @@ extraction/fast.mli
 extraction/fast.ml
 extraction/stats.mli
 extraction/stats.ml
+extraction/defunc.mli
+extraction/defunc.ml
+extraction/dfn_impl.mli
+extraction/dfn_impl.ml
+extraction/hoist.mli
+extraction/hoist.ml
+extraction/freshen.mli
+extraction/freshen.ml
+extraction/ar.mli
+extraction/ar.ml
+extraction/ar_impl.mli
+extraction/ar_impl.ml

@@ -284,11 +284,17 @@ Dpe
 Dpe_impl
 Cp
 Cp_impl
+Ar
+Ar_impl
 Spec
 Impl
 Fast
 Retag
 Stats
+Defunc
+Dfn_impl
+Hoist
+Freshen
 Toplevel
 Toplevel0
 
