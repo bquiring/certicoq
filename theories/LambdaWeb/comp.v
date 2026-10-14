@@ -209,15 +209,14 @@ Section Types.
 
     (** The web of linking thunks: it is exposed, since it is the interface
         between separately compiled units.  It is the function tag λANF uses
-        for linking. *)
-    Variable (lft : web).
-    Hypothesis (Hlft : exposedb lft = true).
+        for linking (as an exposed web). *)
+    Variable (lft : term.fun_tag).
 
     Definition link_var (x : var) (e1 e2 : exp) : var :=
       (identifiers.max_var (erase e1) (identifiers.max_var (erase e2) x) + 1)%positive.
 
     Definition link_w (x : var) (e1 e2 : exp) : exp :=
-      link (link_var x e1 e2) lft x e1 e2.
+      link (link_var x e1 e2) (Exposed lft) x e1 e2.
 
     (** Linking erases to λANF linking. *)
     Lemma erase_link_w x e1 e2 :
@@ -254,7 +253,7 @@ Section Types.
         eapply (V_fun_def cenv VT_web); try (simpl; rewrite peq_true; reflexivity); eauto.
         intros j vs1 vs2 rho1' rho2' Hlt Hexpv Hvs Hs1 Hs2.
         destruct vs1; [| simpl in Hs1; congruence ]. destruct vs2; [| simpl in Hs2; congruence ].
-        inv Hs1. inv Hs2. rewrite Hlft.
+        inv Hs1. inv Hs2. change (exposedb (Exposed lft)) with true.
         eapply (E_post_mono cenv VT_web); [ eassumption |].
         eapply Hlib.
         + eapply (G_top_empty cenv VT_web); [ eapply Hc | |];
@@ -279,8 +278,7 @@ Section Types.
 
   Section LinkingComp.
 
-    Variable (cenv : term.ctor_env) (lft : web).
-    Hypothesis (Hlft : exposedb lft = true).
+    Variable (cenv : term.ctor_env) (lft : term.fun_tag).
 
     Context (post_prop : post_property)
             (Hpr : forall P PG, post_prop P PG -> Post_properties cenv P P PG).

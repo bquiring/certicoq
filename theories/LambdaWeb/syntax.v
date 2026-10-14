@@ -30,20 +30,76 @@ Definition ctor_tag := term.ctor_tag.
 Definition prim := term.prim.
 Definition primitive_value := AstCommon.primitive_value.
 
-(** Web identifiers. A function web plays the role of λANF's [fun_tag]. *)
-Definition web := M.elt.
+(** * Webs
+
+    A web is either exposed or internal.  The paper fixes a single set of
+    exposed webs Δ shared by every correct compiler; here Δ is the set of
+    webs built with [Exposed].  A function web plays the role of λANF's
+    [fun_tag]: erasure maps a web to its index ([web_tag]), and exposed
+    functions keep their λANF function tag ([Exposed t]). *)
+Inductive web : Type :=
+| Exposed : positive -> web
+| Internal : positive -> web.
+
 Definition webs := Ensemble web.
 
-(** * The set of exposed webs
+Definition exposedb (w : web) : bool :=
+  match w with Exposed _ => true | Internal _ => false end.
 
-    The paper fixes a single set of exposed webs Δ shared by every correct
-    compiler.  We leave it abstract, as a decidable predicate. *)
-Parameter exposedb : web -> bool.
+Definition exposed_webs : webs := fun w => exposedb w = true.
 
-Definition Exposed : webs := fun w => exposedb w = true.
+Lemma exposedb_false w : exposedb w = false <-> ~ exposed_webs w.
+Proof. unfold exposed_webs. destruct (exposedb w); split; congruence. Qed.
 
-Lemma exposedb_false w : exposedb w = false <-> ~ Exposed w.
-Proof. unfold Exposed. destruct (exposedb w); split; congruence. Qed.
+Definition web_eq_dec (w1 w2 : web) : {w1 = w2} + {w1 <> w2}.
+Proof. decide equality; apply Pos.eq_dec. Defined.
+
+Definition web_eqb (w1 w2 : web) : bool := if web_eq_dec w1 w2 then true else false.
+
+Lemma web_eqb_eq w1 w2 : web_eqb w1 w2 = true <-> w1 = w2.
+Proof. unfold web_eqb. destruct (web_eq_dec w1 w2); split; congruence. Qed.
+
+Lemma web_eqb_refl w : web_eqb w w = true.
+Proof. apply web_eqb_eq. reflexivity. Qed.
+
+(** The λANF function tag of a web. *)
+Definition web_tag (w : web) : term.fun_tag :=
+  match w with Exposed t => t | Internal t => t end.
+
+(** Maps indexed by webs *)
+Definition web_index (w : web) : positive :=
+  match w with Exposed p => xI p | Internal p => xO p end.
+
+Definition web_of_index (p : positive) : web :=
+  match p with xI p => Exposed p | xO p => Internal p | xH => Internal xH end.
+
+Lemma web_of_index_index w : web_of_index (web_index w) = w.
+Proof. destruct w; reflexivity. Qed.
+
+Module WebIndexed <: INDEXED_TYPE.
+  Definition t := web.
+  Definition index := web_index.
+  Lemma index_inj (x y : t) : index x = index y -> x = y.
+  Proof. intros H. rewrite <- (web_of_index_index x), <- (web_of_index_index y). unfold index in H. congruence. Qed.
+  Definition eq := web_eq_dec.
+End WebIndexed.
+
+Module WM := ITree(WebIndexed).
+
+Lemma WM_gmap_filter1 {A B} (f : A -> option B) (m : WM.t A) w :
+  WM.get w (M.map_filter1 f m) = match WM.get w m with Some a => f a | None => None end.
+Proof. apply M.gmap_filter1. Qed.
+
+(** The keys of a web map *)
+Definition WM_elements {A} (m : WM.t A) : list (web * A) :=
+  map (fun '(p, a) => (web_of_index p, a)) (M.elements m).
+
+Lemma WM_elements_correct {A} (m : WM.t A) w a : WM.get w m = Some a -> List.In (w, a) (WM_elements m).
+Proof.
+  intros H. unfold WM_elements. eapply in_map_iff. exists (web_index w, a). split.
+  - rewrite web_of_index_index. reflexivity.
+  - eapply M.elements_correct. exact H.
+Qed.
 
 (** * Syntax *)
 
@@ -107,16 +163,16 @@ Fixpoint erase (e : exp) : term.exp :=
                        | (c, e) :: cl => (c, erase e) :: erase_branches cl
                        end) cl)
   | Eproj x w t n y e => term.Eproj x t n y (erase e)
-  | Eletapp x f w ys e => term.Eletapp x f w ys (erase e)
+  | Eletapp x f w ys e => term.Eletapp x f (web_tag w) ys (erase e)
   | Efun B e => term.Efun (erase_fundefs B) (erase e)
-  | Eapp f w ys => term.Eapp f w ys
+  | Eapp f w ys => term.Eapp f (web_tag w) ys
   | Eprim_val x p e => term.Eprim_val x p (erase e)
   | Eprim x p ys e => term.Eprim x p ys (erase e)
   | Ehalt x => term.Ehalt x
   end
 with erase_fundefs (B : fundefs) : term.fundefs :=
   match B with
-  | Fcons f w xs e B => term.Fcons f w xs (erase e) (erase_fundefs B)
+  | Fcons f w xs e B => term.Fcons f (web_tag w) xs (erase e) (erase_fundefs B)
   | Fnil => term.Fnil
   end.
 
@@ -346,7 +402,7 @@ Lemma name_in_fundefs_erase B :
 Proof. induction B; simpl; [ rewrite IHB |]; reflexivity. Qed.
 
 Lemma find_def_erase f B w xs e :
-  find_def f B = Some (w, xs, e) -> term.find_def f (erase_fundefs B) = Some (w, xs, erase e).
+  find_def f B = Some (w, xs, e) -> term.find_def f (erase_fundefs B) = Some (web_tag w, xs, erase e).
 Proof.
   induction B; simpl; intros H; try congruence.
   destruct (M.elt_eq f v); subst; eauto. inv H; reflexivity.
@@ -419,13 +475,13 @@ Proof. exact (identifiers.occurs_free_Eproj x t n y (erase e)). Qed.
 
 Lemma occurs_free_Eletapp x f w ys e :
   occurs_free (Eletapp x f w ys e) <--> (f |: FromList ys) :|: (occurs_free e \\ [set x]).
-Proof. exact (identifiers.occurs_free_Eletapp x f w ys (erase e)). Qed.
+Proof. exact (identifiers.occurs_free_Eletapp x f (web_tag w) ys (erase e)). Qed.
 
 Lemma occurs_free_Ehalt x : occurs_free (Ehalt x) <--> [set x].
 Proof. exact (identifiers.occurs_free_Ehalt x). Qed.
 
 Lemma occurs_free_Eapp f w ys : occurs_free (Eapp f w ys) <--> FromList ys :|: [set f].
-Proof. exact (identifiers.occurs_free_Eapp f w ys). Qed.
+Proof. exact (identifiers.occurs_free_Eapp f (web_tag w) ys). Qed.
 
 Lemma occurs_free_Efun B e :
   occurs_free (Efun B e) <--> occurs_free_fundefs B :|: (occurs_free e \\ name_in_fundefs B).

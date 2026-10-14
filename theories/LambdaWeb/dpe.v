@@ -82,15 +82,15 @@ Qed.
 (** * Specification of the transformation *)
 
 (** Webs with a mask are transformed; the others are left unchanged. *)
-Definition sel_L {A} (L : M.t A) (w : web) : bool :=
-  match L ! w with Some _ => true | None => false end.
+Definition sel_L {A} (L : WM.t A) (w : web) : bool :=
+  match WM.get w L with Some _ => true | None => false end.
 
-Lemma sel_L_Some {A} (L : M.t A) w a : L ! w = Some a -> sel_L L w = true.
+Lemma sel_L_Some {A} (L : WM.t A) w a : WM.get w L = Some a -> sel_L L w = true.
 Proof. unfold sel_L. intros H; rewrite H; reflexivity. Qed.
 
 Section DPE_spec.
 
-  Variable (L : M.t (list bool)).
+  Variable (L : WM.t (list bool)).
 
   (** [Gb] bounds the number of dead bindings removed on any path of a
       function body (between two calls); it is the [G] of CertiRocq's
@@ -123,7 +123,7 @@ Section DPE_spec.
   | Trans_letapp :
       forall n x f w ys e e' bs,
         exposedb w = false ->
-        L ! w = Some bs ->
+        WM.get w L = Some bs ->
         trans n e e' ->
         trans n (Eletapp x f w ys e) (Eletapp x f w (live_args ys bs) e')
   | Trans_app_exposed :
@@ -133,7 +133,7 @@ Section DPE_spec.
   | Trans_app :
       forall n f w ys bs,
         exposedb w = false ->
-        L ! w = Some bs ->
+        WM.get w L = Some bs ->
         trans n (Eapp f w ys) (Eapp f w (live_args ys bs))
   | Trans_fun :
       forall n B B' e e',
@@ -177,7 +177,7 @@ Section DPE_spec.
   | Trans_Fcons :
       forall f w xs e e' B B' bs,
         exposedb w = false ->
-        L ! w = Some bs ->
+        WM.get w L = Some bs ->
         length bs = length xs ->
         trans Gb e e' ->
         (* dead parameters do not occur in the transformed body *)
@@ -213,7 +213,7 @@ Section DPE_spec.
     exists e',
       trans Gb e e' /\
       ((keeps (sel_L L) w = true /\ find_def f B' = Some (w, xs, e')) \/
-       (exists bs, exposedb w = false /\ L ! w = Some bs /\ length bs = length xs /\
+       (exists bs, exposedb w = false /\ WM.get w L = Some bs /\ length bs = length xs /\
                    Disjoint _ (FromList (dead_args xs bs)) (occurs_free e') /\
                    find_def f B' = Some (w, live_args xs bs, e'))).
   Proof.
@@ -287,7 +287,7 @@ Section DPE_rel.
   Local Notation PostGT := (@exposed.PostGT fuel trace).
   Local Notation VTransT := (@exposed.VTransT fuel trace).
 
-  Variables (L : M.t (list bool)) (Gb : nat).
+  Variables (L : WM.t (list bool)) (Gb : nat).
 
   (** Internal closures: calling the source closure on any arguments is
       related to calling the target closure on the live arguments.  Dead
@@ -300,7 +300,7 @@ Section DPE_rel.
             find_def f1 B1 = Some (w, xs1, e1) ->
             Some rho1' = set_lists xs1 vs1 (def_funs B1 B1 rho1 rho1) ->
             exists bs e2,
-              L ! w = Some bs /\
+              WM.get w L = Some bs /\
               find_def f2 B2 = Some (w, live_args xs1 bs, e2) /\
               (length vs2 = length (live_args vs1 bs) ->
                exists rho2',
@@ -395,7 +395,7 @@ Section DPE_rel.
         (Hcompat : post_app_compat' f w ys rho1 f w (live_args ys bs) rho2 P PG)
         (HOOT : post_OOT' (Eapp f w ys) rho1 (Eapp f w (live_args ys bs)) rho2 P) :
     exposedb w = false ->
-    L ! w = Some bs ->
+    WM.get w L = Some bs ->
     wf_env rho1 ->
     var_rel k rho1 rho2 f f ->
     Forall2 (var_rel k rho1 rho2) (live_args ys bs) (live_args ys bs) ->
@@ -430,7 +430,7 @@ Section DPE_rel.
         (HcompatOOT : post_letapp_compat_OOT' x f w ys e1 rho1 x f w (live_args ys bs) e2 rho2 P PG)
         (HOOT : post_OOT' (Eletapp x f w ys e1) rho1 (Eletapp x f w (live_args ys bs) e2) rho2 P) :
     exposedb w = false ->
-    L ! w = Some bs ->
+    WM.get w L = Some bs ->
     wf_env rho1 ->
     var_rel k rho1 rho2 f f ->
     Forall2 (var_rel k rho1 rho2) (live_args ys bs) (live_args ys bs) ->
@@ -701,7 +701,7 @@ Qed.
 
 Section DPE_top.
 
-  Variables (cenv : term.ctor_env) (L : M.t (list bool)) (Gb : nat).
+  Variables (cenv : term.ctor_env) (L : WM.t (list bool)) (Gb : nat).
 
   (** With [dead_bound], the source takes at most [Gb] more steps per call
       than the target, so the target diverges whenever the source does. *)

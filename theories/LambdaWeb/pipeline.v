@@ -41,8 +41,8 @@ Section Pipeline.
 
   (** The interface of exposed webs: the web of exposed constructors, and
       the function tag used for linking thunks. *)
-  Variables (w_con lft : web).
-  Hypotheses (Hw_con : exposedb w_con = true) (Hlft : exposedb lft = true).
+  Variables (w_con : web) (lft : term.fun_tag).
+  Hypothesis (Hw_con : exposedb w_con = true).
 
   (** ** The relations of each phase *)
 

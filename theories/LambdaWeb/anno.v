@@ -8,7 +8,7 @@
    exposed and follow a fixed interface, so that separately annotated units
    can be linked:
 
-   - exposed functions keep their λANF function tag as their web (λANF
+   - exposed functions keep their λANF function tag [t] as their web [Exposed t] (λANF
      already uses its function tags as calling conventions, e.g. one per
      arity);
    - exposed constructors carry the fixed web [w_con].
@@ -71,7 +71,7 @@ Section Anno.
           term.find_def f1 B1 = Some (t, xs1, e1) ->
           Some rho1' = set_lists xs1 vs1 (term.def_funs B1 B1 rho1 rho1) ->
           exists xs2 e2 rho2',
-            find_def f2 B2 = Some (t, xs2, e2) /\
+            find_def f2 B2 = Some (Exposed t, xs2, e2) /\
             Some rho2' = set_lists xs2 vs2 (def_funs B2 B2 rho2 rho2) /\
             (j < k -> Forall2 (V' j) vs1 vs2 -> E_a' V' PG j (e1, rho1') (e2, rho2'))
     | _, _ => False
@@ -316,7 +316,7 @@ Section Anno.
       PG (e_b1, rhoc1', c1, cout1) (e_b2, rhoc2, c2, cout2) ->
       P1 (e1, M.set x v1 rho1, c1', cout1') (e2, M.set x v2 rho2, c2', cout2') ->
       P2 (term.Eletapp x f1 t ys1 e1, rho1, c1 <+> c1' <+> one (term.Eletapp x f1 t ys1 e1), cout1 <+> cout1' <+> one (term.Eletapp x f1 t ys1 e1))
-         (Eletapp x f2 t ys2 e2, rho2, c2 <+> c2' <+> one_w (Eletapp x f2 t ys2 e2), cout2 <+> cout2' <+> one_w (Eletapp x f2 t ys2 e2)).
+         (Eletapp x f2 (Exposed t) ys2 e2, rho2, c2 <+> c2' <+> one_w (Eletapp x f2 (Exposed t) ys2 e2), cout2 <+> cout2' <+> one_w (Eletapp x f2 (Exposed t) ys2 e2)).
 
   Definition post_a_letapp_OOT (P2 PG : PostT_a) :=
     forall x f1 f2 t ys1 ys2 e1 rho1 e2 rho2 xs e_b1 e_b2 rhoc1 rhoc2 B h vs rhoc1' c1 c2 cout1 cout2,
@@ -326,7 +326,7 @@ Section Anno.
       set_lists xs vs (term.def_funs B B rhoc1 rhoc1) = Some rhoc1' ->
       PG (e_b1, rhoc1', c1, cout1) (e_b2, rhoc2, c2, cout2) ->
       P2 (term.Eletapp x f1 t ys1 e1, rho1, c1 <+> one (term.Eletapp x f1 t ys1 e1), cout1 <+> one (term.Eletapp x f1 t ys1 e1))
-         (Eletapp x f2 t ys2 e2, rho2, c2 <+> one_w (Eletapp x f2 t ys2 e2), cout2 <+> one_w (Eletapp x f2 t ys2 e2)).
+         (Eletapp x f2 (Exposed t) ys2 e2, rho2, c2 <+> one_w (Eletapp x f2 (Exposed t) ys2 e2), cout2 <+> one_w (Eletapp x f2 (Exposed t) ys2 e2)).
 
   Class Post_properties_a (P PG : PostT_a) : Prop :=
     { HPa_fun : post_a_fun P P;
@@ -378,7 +378,7 @@ Section Anno.
     Forall2 (var_rel_a PG k rho1 rho2) ys1 ys2 ->
     (forall m v1 v2, m < k -> V_a PG m v1 v2 ->
                      E_a PG P1 m (e1, M.set x v1 rho1) (e2, M.set x v2 rho2)) ->
-    E_a PG P2 k (term.Eletapp x f1 t ys1 e1, rho1) (Eletapp x f2 t ys2 e2, rho2).
+    E_a PG P2 k (term.Eletapp x f1 t ys1 e1, rho1) (Eletapp x f2 (Exposed t) ys2 e2, rho2).
   Proof.
     intros Hfun Hall Hk r1 cin cout Hleq Hstep. inv Hstep.
     - exists OOT, cin, <0>. split; [ constructor; eassumption |].
@@ -398,8 +398,7 @@ Section Anno.
          destruct v2; try contradiction;
          edestruct (Hv vs vs2 (k - 1)) as (xs2 & eb2 & rho2' & Hf2 & Hset2 & Hbody); eauto;
          [ eapply Forall2_length; eauto | ];
-         assert (Hte : exposedb t = true)
-           by (rewrite exposed_val_Vfun in Hexpv2; destructAll; congruence);
+         assert (Hte : exposedb (Exposed t) = true) by reflexivity;
          assert (Hexpvs : Forall exposed_val vs2)
            by (clear -Hvs; induction Hvs; constructor; eauto; eapply V_a_exposed; eauto)).
       + edestruct Hbody as (r2 & cin' & cout' & Hstep2 & Hpost & HR);
@@ -424,8 +423,7 @@ Section Anno.
           -- exact I.
   Qed.
 
-  Variable (lft : web).
-  Hypothesis (Hlft : exposedb lft = true).
+  Variable (lft : term.fun_tag).
 
   Context (P : PostT_a) (PG : PostT_a) (Hpr : Post_properties_a P PG).
 
@@ -447,7 +445,7 @@ Section Anno.
     set (f1 := (identifiers.max_var e1 (identifiers.max_var e1' x) + 1)%positive).
     set (f2 := link_var x e2 e2').
     set (B1 := term.Fcons f1 lft [] e1 term.Fnil).
-    set (B2 := Fcons f2 lft [] e2 Fnil).
+    set (B2 := Fcons f2 (Exposed lft) [] e2 Fnil).
     assert (Hwfc : wf_env (def_funs B2 B2 rho2 rho2)) by (eapply wf_env_def_funs; eauto).
     eapply E_a_fun_compat; eauto.
     eapply E_a_letapp_compat; eauto.

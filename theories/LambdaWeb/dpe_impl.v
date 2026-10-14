@@ -144,16 +144,16 @@ Fixpoint join_bool (bs1 bs2 : list bool) : list bool :=
   | _, _ => []
   end.
 
-Definition add_mask (w : web) (m : list bool) (tbl : M.t entry) : M.t entry :=
-  match tbl ! w with
-  | None => M.set w (Some m) tbl
+Definition add_mask (w : web) (m : list bool) (tbl : WM.t entry) : WM.t entry :=
+  match WM.get w tbl with
+  | None => WM.set w (Some m) tbl
   | Some None => tbl
   | Some (Some m') =>
-      if Nat.eqb (length m') (length m) then M.set w (Some (join_bool m' m)) tbl
-      else M.set w None tbl
+      if Nat.eqb (length m') (length m) then WM.set w (Some (join_bool m' m)) tbl
+      else WM.set w None tbl
   end.
 
-Fixpoint collect (e : exp) (tbl : M.t entry) : M.t entry :=
+Fixpoint collect (e : exp) (tbl : WM.t entry) : WM.t entry :=
   match e with
   | Econstr _ _ _ _ k | Eproj _ _ _ _ _ k | Eletapp _ _ _ _ k => collect k tbl
   | Ecase _ _ cl =>
@@ -165,7 +165,7 @@ Fixpoint collect (e : exp) (tbl : M.t entry) : M.t entry :=
   | Efun B k => collect k (collect_fd B tbl)
   | Eapp _ _ _ | Eprim_val _ _ _ | Eprim _ _ _ _ | Ehalt _ => tbl
   end
-with collect_fd (B : fundefs) (tbl : M.t entry) : M.t entry :=
+with collect_fd (B : fundefs) (tbl : WM.t entry) : WM.t entry :=
   match B with
   | Fcons f w xs e B =>
       let tbl := if exposedb w then tbl else add_mask w (map (is_free e) xs) tbl in
@@ -173,18 +173,18 @@ with collect_fd (B : fundefs) (tbl : M.t entry) : M.t entry :=
   | Fnil => tbl
   end.
 
-Definition masks (e : exp) : M.t (list bool) :=
-  M.map_filter1 (fun o : entry => o) (collect e (M.empty _)).
+Definition masks (e : exp) : WM.t (list bool) :=
+  M.map_filter1 (fun o : entry => o) (collect e (WM.empty _)).
 
 (** * The transformation *)
 
 Section Transform.
 
-  Variable (L : M.t (list bool)).
+  Variable (L : WM.t (list bool)).
 
   Definition dpe_args {A} (w : web) (ys : list A) : list A :=
     if keeps (sel_L L) w then ys
-    else match L ! w with Some bs => live_args ys bs | None => ys end.
+    else match WM.get w L with Some bs => live_args ys bs | None => ys end.
 
   Fixpoint dpe (e : exp) : exp :=
     match e with
@@ -239,20 +239,20 @@ with all_funs_fd (P : web -> list var -> exp -> Prop) (B : fundefs) : Prop :=
 
 Section Correct.
 
-  Variables (L : M.t (list bool)) (Gb : nat).
+  Variables (L : WM.t (list bool)) (Gb : nat).
 
   Definition mask_ok (w : web) (xs : list var) (e : exp) : Prop :=
-    forall bs, exposedb w = false -> L ! w = Some bs ->
+    forall bs, exposedb w = false -> WM.get w L = Some bs ->
                length bs = length xs /\ Disjoint _ (FromList (dead_args xs bs)) (occurs_free e).
 
   Lemma dpe_args_keeps {A} w (ys : list A) : keeps (sel_L L) w = true -> dpe_args L w ys = ys.
   Proof. unfold dpe_args. intros H; rewrite H; reflexivity. Qed.
 
   Lemma dpe_args_sel {A} w (ys : list A) :
-    keeps (sel_L L) w = false -> exists bs, exposedb w = false /\ L ! w = Some bs /\ dpe_args L w ys = live_args ys bs.
+    keeps (sel_L L) w = false -> exists bs, exposedb w = false /\ WM.get w L = Some bs /\ dpe_args L w ys = live_args ys bs.
   Proof.
     unfold dpe_args. intros H. rewrite H. apply keeps_internal in H. destruct H as [Hw Hs].
-    unfold sel_L in Hs. destruct (L ! w) as [bs |] eqn:HL; [| discriminate ].
+    unfold sel_L in Hs. destruct (WM.get w L) as [bs |] eqn:HL; [| discriminate ].
     eexists; eauto.
   Qed.
 
@@ -374,30 +374,30 @@ Proof.
   split; eauto. intros ->. apply orb_true_r.
 Qed.
 
-Lemma add_mask_mono w m tbl w' : entry_le (tbl ! w') ((add_mask w m tbl) ! w').
+Lemma add_mask_mono w m tbl w' : entry_le (WM.get w' tbl) (WM.get w' (add_mask w m tbl)).
 Proof.
-  unfold add_mask. destruct (peq w' w); subst.
-  - destruct (tbl ! w) as [[m' |] |] eqn:Hw.
-    + destruct (Nat.eqb_spec (length m') (length m)); rewrite M.gss; simpl; eauto.
+  unfold add_mask. destruct (web_eq_dec w' w); subst.
+  - destruct (WM.get w tbl) as [[m' |] |] eqn:Hw.
+    + destruct (Nat.eqb_spec (length m') (length m)); rewrite WM.gss; simpl; eauto.
       split; [ symmetry; eapply join_bool_length; eassumption | eapply join_bool_le_l; eassumption ].
     + rewrite Hw. simpl. eauto.
     + simpl. eauto.
-  - destruct (tbl ! w) as [[m' |] |] eqn:Hw;
-      [ destruct (Nat.eqb (length m') (length m)) | |]; rewrite ?M.gso; eauto using entry_le_refl.
+  - destruct (WM.get w tbl) as [[m' |] |] eqn:Hw;
+      [ destruct (Nat.eqb (length m') (length m)) | |]; rewrite ?WM.gso; eauto using entry_le_refl.
 Qed.
 
-Lemma add_mask_covers w m tbl : entry_le (Some (Some m)) ((add_mask w m tbl) ! w).
+Lemma add_mask_covers w m tbl : entry_le (Some (Some m)) (WM.get w (add_mask w m tbl)).
 Proof.
-  unfold add_mask. destruct (tbl ! w) as [[m' |] |] eqn:Hw.
-  - destruct (Nat.eqb_spec (length m') (length m)); rewrite M.gss; simpl; eauto.
+  unfold add_mask. destruct (WM.get w tbl) as [[m' |] |] eqn:Hw.
+  - destruct (Nat.eqb_spec (length m') (length m)); rewrite WM.gss; simpl; eauto.
     split; [ rewrite join_bool_length; eauto | eapply join_bool_le_r; eassumption ].
   - rewrite Hw. simpl. eauto.
-  - rewrite M.gss. simpl. split; eauto using bools_le_refl.
+  - rewrite WM.gss. simpl. split; eauto using bools_le_refl.
 Qed.
 
 Lemma collect_mono :
-  (forall e tbl w, entry_le (tbl ! w) ((collect e tbl) ! w)) /\
-  (forall B tbl w, entry_le (tbl ! w) ((collect_fd B tbl) ! w)).
+  (forall e tbl w, entry_le (WM.get w tbl) (WM.get w (collect e tbl))) /\
+  (forall B tbl w, entry_le (WM.get w tbl) (WM.get w (collect_fd B tbl))).
 Proof.
   eapply exp_fundefs_ind; simpl; intros; eauto using entry_le_refl.
   - eapply entry_le_trans; [| eapply H0 ]. eauto.
@@ -406,12 +406,12 @@ Proof.
     destruct (exposedb w); [ eapply entry_le_refl | eapply add_mask_mono ].
 Qed.
 
-Definition covered (T : M.t entry) (w : web) (xs : list var) (e : exp) : Prop :=
-  exposedb w = false -> entry_le (Some (Some (map (is_free e) xs))) (T ! w).
+Definition covered (T : WM.t entry) (w : web) (xs : list var) (e : exp) : Prop :=
+  exposedb w = false -> entry_le (Some (Some (map (is_free e) xs))) (WM.get w T).
 
 Lemma collect_covers :
-  (forall e tbl T, (forall w, entry_le ((collect e tbl) ! w) (T ! w)) -> all_funs (covered T) e) /\
-  (forall B tbl T, (forall w, entry_le ((collect_fd B tbl) ! w) (T ! w)) -> all_funs_fd (covered T) B).
+  (forall e tbl T, (forall w, entry_le (WM.get w (collect e tbl)) (WM.get w T)) -> all_funs (covered T) e) /\
+  (forall B tbl T, (forall w, entry_le (WM.get w (collect_fd B tbl)) (WM.get w T)) -> all_funs_fd (covered T) B).
 Proof.
   eapply exp_fundefs_ind.
   - intros x w t ys e He tbl T HT. exact (He tbl T HT).
@@ -456,11 +456,11 @@ Proof. intros HPQ. eapply exp_fundefs_ind; simpl; intros; intuition eauto. Qed.
 
 Lemma masks_ok e : all_funs (mask_ok (masks e)) e.
 Proof.
-  set (T := collect e (M.empty _)).
+  set (T := collect e (WM.empty _)).
   pose proof (proj1 collect_covers e (M.empty _) T (fun w => entry_le_refl _)) as Hc.
   assert (Himp : forall w xs body, covered T w xs body -> mask_ok (masks e) w xs body).
-  { intros w xs body Hcov bs Hw HL. unfold masks in HL. fold T in HL. rewrite M.gmap_filter1 in HL.
-    specialize (Hcov Hw). destruct (T ! w) as [[m |] |]; simpl in *; try congruence. inv HL.
+  { intros w xs body Hcov bs Hw HL. unfold masks in HL. fold T in HL. rewrite WM_gmap_filter1 in HL.
+    specialize (Hcov Hw). destruct (WM.get w T) as [[m |] |]; simpl in *; try congruence. inv HL.
     destruct Hcov as [Hlen Hle]. split; [ rewrite <- Hlen, length_map; reflexivity |].
     constructor. intros z Hz. destruct Hz as [z Hz1 Hz2]. eapply dead_args_not_free; eassumption. }
   exact (proj1 (all_funs_mono _ _ Himp) e Hc).

@@ -23,7 +23,7 @@ relation (`anno.v`) and assumed in `pipeline.v`.
 
 | File | Contents | Paper |
 | :--- | :--- | :--- |
-| `syntax.v` | λweb syntax and values, the abstract exposed webs, exposed and well-formed values, erasure to λANF, free variables (inherited through erasure) | Fig. 3, Fig. 4 (top) |
+| `syntax.v` | λweb syntax and values, webs (`Exposed p` / `Internal p`) and maps indexed by webs (`WM`), exposed and well-formed values, erasure to λANF, free variables (inherited through erasure) | Fig. 3, Fig. 4 (top) |
 | `semantics.v` | Fuel/trace big-step semantics with web and exposure checks; determinism, fuel lemmas, preservation of well-formedness | Fig. 4, Lemma 4.1 |
 | `exposed.v` | The parameterized relations `V`/`E`/`R`/`G` over a transformation-specific relation `VT` for internal closures; monotonicity; environments of mutually recursive bundles | Fig. 5 |
 | `post.v` | λweb versions of CertiRocq's postcondition obligations; `P_ge` (target fuel ≥ source fuel); obligations for removed source / inserted target binding steps and the `Post_dead` families | — |
@@ -43,6 +43,7 @@ relation (`anno.v`) and assumed in `pipeline.v`.
 | `erase.v` | Cross-language erasure relation λweb → λANF; `erase` is correct; adequacy; linking | §7.4, Fig. 11, Lemmas 7.7, 7.8 |
 | `anno.v` | Cross-language annotation relation λANF → λweb (the spec of an analysis); adequacy; linking | §7.2, Fig. 10, Lemmas 7.3, 7.4 |
 | `pipeline.v` | Composition with CertiRocq's `preord_exp_n`: refinement and linking for the whole pipeline; a compiler built from correct phases is correct | §7.5, Lemmas 7.10, 7.11 |
+| `passes.v` | The implemented passes as steps of `web_exp_n` (`dpe_web_n`, `cp_web_n`, `dfn_top_web_n`); the λweb optimizer DPE ; CP ; defunc; a compiler through it, correct across the extension of the constructor environment | — |
 
 Main results: `V_exposed_indep`, `E_top_E_web` (indep.v), `E_web_refl`
 (refl.v), `E_web_dpe`, `E_web_dpe_dead`, `dpe_refines` (dpe.v), `E_web_cp`,
@@ -51,11 +52,13 @@ Main results: `V_exposed_indep`, `E_top_E_web` (indep.v), `E_web_refl`
 `E_erase_preserves_linking` (erase.v), `E_anno_refines`,
 `E_anno_preserves_linking` (anno.v), `dfn_correct_top`, `dfn_refines` (defunc.v), `dpe_top_refines`, `cp_top_refines`,
 `dfn_top_refines` (implementations), `pipeline_refines`,
-`pipeline_preserves_linking`, `compile_refines` (pipeline.v).
+`pipeline_preserves_linking`, `compile_refines` (pipeline.v),
+`trans_top_preserves_fv` (defunc.v), `web_opt_web_n`, `compile_refines`
+(passes.v).
 
-`Print Assumptions` on each of them reports only `exposedb` (the abstract set
-of exposed webs) and Rocq's primitive types used by CertiRocq's primitive
-values.
+`Print Assumptions` on each of them reports only Rocq's primitive types used
+by CertiRocq's primitive values.  The implementations compute (e.g. with
+`vm_compute`).
 
 ## Building
 
@@ -81,9 +84,14 @@ make LambdaWeb/pipeline.vo LambdaWeb/dpe.vo
   in `B` is; bundles may mix exposed and internal functions.  Closures of a
   bundle are related by Löb induction on the step index (`Vfun_id`,
   `Vfun_dpe`, `V_e_fun_erase`) and then installed with `G_def_funs`.
-* **Interface.** Exposed functions keep their λANF function tag as web;
-  exposed constructors use a fixed web `w_con`; the linking thunk uses the
-  λANF linking tag `lft`, which must be exposed.  λweb linking (`link_w`)
+* **Webs.** A web is `Exposed p` or `Internal p`; erasure maps both to the
+  λANF function tag `p` (`web_tag`), which is enough since erasure only needs
+  equal webs to give equal tags.  Passes that need fresh webs (the join
+  points of defunctionalization) take an `Internal` index above every one in
+  the program.
+* **Interface.** Exposed functions keep their λANF function tag `t` as web
+  `Exposed t`; exposed constructors use a fixed exposed web `w_con`; the
+  linking thunk uses `Exposed lft` for the λANF linking tag `lft`.  λweb linking (`link_w`)
   erases syntactically to λANF's `rel_comp.link`.
 * **Erasure** relates every λweb value (exposed or not) to its λANF
   counterpart; this is weaker than the paper's Fig. 11 (which only relates
@@ -95,12 +103,9 @@ make LambdaWeb/pipeline.vo LambdaWeb/dpe.vo
 
 ## Not ported yet
 
-* Composing defunctionalization with `web_exp_n` needs `preserves_fv` for
-  `trans_top` (free variables of the target are free in the source); since
-  the code functions are no longer created by the pass, this should be a
-  syntactic induction, but it is not done.
-* The implementations cannot be run inside Rocq, since the set of exposed
-  webs (`exposedb`) is a parameter.
+* Linking for the compiler of `passes.v`: defunctionalization extends the
+  constructor environment per compilation unit, so separately compiled units
+  would have to agree on the new tags.
 * A flow analysis inhabiting the annotation relation (the pipeline assumes
   one).
 

@@ -117,6 +117,7 @@ LambdaWeb/dfn_impl.v
 LambdaWeb/erase.v
 LambdaWeb/anno.v
 LambdaWeb/pipeline.v
+LambdaWeb/passes.v
 
 # Codegen
 Codegen/tactics.v

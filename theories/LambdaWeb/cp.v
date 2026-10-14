@@ -219,7 +219,7 @@ Qed.
 
 Section CP_spec.
 
-  Variables (Lc : M.t (list (option const_info))) (Gb : nat).
+  Variables (Lc : WM.t (list (option const_info))) (Gb : nat).
 
   Inductive trans : M.t const_info -> nat -> exp -> exp -> Prop :=
   | Trans_constr_const :
@@ -250,7 +250,7 @@ Section CP_spec.
   | Trans_letapp :
       forall K n x f w ys e e' cs,
         exposedb w = false ->
-        Lc ! w = Some cs ->
+        WM.get w Lc = Some cs ->
         const_ok K ys cs ->
         trans (M.remove x K) n e e' ->
         trans K n (Eletapp x f w ys e) (Eletapp x f w (live_args ys (cmask cs)) e')
@@ -261,7 +261,7 @@ Section CP_spec.
   | Trans_app :
       forall K n f w ys cs,
         exposedb w = false ->
-        Lc ! w = Some cs ->
+        WM.get w Lc = Some cs ->
         const_ok K ys cs ->
         trans K n (Eapp f w ys) (Eapp f w (live_args ys (cmask cs)))
   | Trans_fun :
@@ -310,7 +310,7 @@ Section CP_spec.
   | Trans_Fcons :
       forall K f w xs e e' B B' cs,
         exposedb w = false ->
-        Lc ! w = Some cs ->
+        WM.get w Lc = Some cs ->
         length cs = length xs ->
         NoDup xs ->
         trans (param_consts xs cs K) Gb e e' ->
@@ -352,7 +352,7 @@ Section CP_spec.
     exists e',
       (keeps (sel_L Lc) w = true /\ trans (param_consts xs [] K) Gb e e' /\
        find_def f B' = Some (w, xs, e')) \/
-      (exists cs, exposedb w = false /\ Lc ! w = Some cs /\ length cs = length xs /\ NoDup xs /\
+      (exists cs, exposedb w = false /\ WM.get w Lc = Some cs /\ length cs = length xs /\ NoDup xs /\
                   trans (param_consts xs cs K) Gb e e' /\
                   find_def f B' = Some (w, live_args xs (cmask cs), bind_consts xs cs e')).
   Proof.
@@ -417,7 +417,7 @@ Section CP_rel.
   Local Notation PostGT := (@exposed.PostGT fuel trace).
   Local Notation VTransT := (@exposed.VTransT fuel trace).
 
-  Variables (Lc : M.t (list (option const_info))) (Gb : nat).
+  Variables (Lc : WM.t (list (option const_info))) (Gb : nat).
 
   (** Internal closures: calling the source closure on arguments whose
       constant positions hold the constants is related to calling the
@@ -430,7 +430,7 @@ Section CP_rel.
             find_def f1 B1 = Some (w, xs1, e1) ->
             Some rho1' = set_lists xs1 vs1 (def_funs B1 B1 rho1 rho1) ->
             exists cs e2,
-              Lc ! w = Some cs /\
+              WM.get w Lc = Some cs /\
               find_def f2 B2 = Some (w, live_args xs1 (cmask cs), e2) /\
               (length vs2 = length (live_args vs1 (cmask cs)) ->
                exists rho2',
@@ -503,7 +503,7 @@ Section CP_rel.
         (Hcompat : post_app_compat' f w ys rho1 f w (live_args ys (cmask cs)) rho2 P PG)
         (HOOT : post_OOT' (Eapp f w ys) rho1 (Eapp f w (live_args ys (cmask cs))) rho2 P) :
     exposedb w = false ->
-    Lc ! w = Some cs ->
+    WM.get w Lc = Some cs ->
     K_inv K rho1 ->
     const_ok K ys cs ->
     wf_env rho1 ->
@@ -540,7 +540,7 @@ Section CP_rel.
         (HcompatOOT : post_letapp_compat_OOT' x f w ys e1 rho1 x f w (live_args ys (cmask cs)) e2 rho2 P PG)
         (HOOT : post_OOT' (Eletapp x f w ys e1) rho1 (Eletapp x f w (live_args ys (cmask cs)) e2) rho2 P) :
     exposedb w = false ->
-    Lc ! w = Some cs ->
+    WM.get w Lc = Some cs ->
     K_inv K rho1 ->
     const_ok K ys cs ->
     wf_env rho1 ->
@@ -827,7 +827,7 @@ End CP_rel.
 
 Section CP_top.
 
-  Variables (cenv : term.ctor_env) (Lc : M.t (list (option const_info))) (Gb : nat).
+  Variables (cenv : term.ctor_env) (Lc : WM.t (list (option const_info))) (Gb : nat).
 
   Theorem cp_refines n e e' :
     closed_exp e -> n <= Gb -> trans Lc Gb (M.empty _) n e e' -> refines cenv value_ref e e'.

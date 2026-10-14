@@ -10,7 +10,7 @@
      ...
      let rec f xs = code_f (xs ++ zs)   (* web w, selected *)
 
-   A selected web [w] has a lambda set [L ! w] of constructor tags; the
+   A selected web [w] has a lambda set [WM.get w L] of constructor tags; the
    closure of a wrapper becomes a record [C_f(zs)] (the tag [C_f] is mapped
    to [code_f] by [T]), and a call through [w] becomes a case analysis on the
    record over the lambda set, whose branches project the fields and call the
@@ -383,14 +383,14 @@ End Defunc.
 
 Section Spec.
 
-  Variable (L : M.t (list ctor_tag)).     (* lambda sets of the selected webs *)
+  Variable (L : WM.t (list ctor_tag)).     (* lambda sets of the selected webs *)
   Variable (T : M.t (var * web * nat)).   (* tag -> code function, its web, number of fields *)
   Variable (Btop : fundefs).              (* the lifted code functions *)
 
   Definition Code : Ensemble var := name_in_fundefs Btop.
 
   Definition alts_ok (w : web) (alts : list alt) (avoid : Ensemble var) : Prop :=
-    L ! w = Some (map alt_tag alts) /\
+    WM.get w L = Some (map alt_tag alts) /\
     Forall (fun a => let '(c, code, wc, zs) := a in
                      T ! c = Some (code, wc, length zs) /\ NoDup zs /\
                      Disjoint _ (FromList zs) (avoid :|: Code)) alts.
@@ -462,9 +462,9 @@ Section Spec.
         trans_bundle rs0 (Fcons f w xs e B) (Fcons f w xs (bind_recs rs0 e') Bk) rs
   | TB_sel :
       forall rs0 f w xs zs B Bk rs lams c code wc,
-        exposedb w = false -> L ! w = Some lams -> List.In c lams ->
+        exposedb w = false -> WM.get w L = Some lams -> List.In c lams ->
         T ! c = Some (code, wc, length zs) -> Code code ->
-        exposedb wc = false -> L ! wc = None ->
+        exposedb wc = false -> WM.get wc L = None ->
         NoDup xs -> Disjoint _ (FromList xs) (FromList zs) -> ~ List.In code xs ->
         trans_bundle rs0 B Bk rs ->
         trans_bundle rs0 (Fcons f w xs (Eapp code wc (xs ++ zs)) B) Bk ((f, w, c, zs) :: rs).
@@ -485,7 +485,7 @@ End Spec.
 
 Section SpecFacts.
 
-  Variables (L : M.t (list ctor_tag)) (T : M.t (var * web * nat)) (Btop : fundefs).
+  Variables (L : WM.t (list ctor_tag)) (T : M.t (var * web * nat)) (Btop : fundefs).
 
   Local Notation Code := (Code Btop).
   Local Notation trans := (trans L T Btop).
@@ -617,9 +617,9 @@ Section SpecFacts.
     rec_of rs f = Some (w, c, zs) ->
     exists xs lams code wc,
       find_def f B = Some (w, xs, Eapp code wc (xs ++ zs)) /\
-      exposedb w = false /\ L ! w = Some lams /\ List.In c lams /\
+      exposedb w = false /\ WM.get w L = Some lams /\ List.In c lams /\
       T ! c = Some (code, wc, length zs) /\ Code code /\
-      exposedb wc = false /\ L ! wc = None /\
+      exposedb wc = false /\ WM.get wc L = None /\
       NoDup xs /\ Disjoint _ (FromList xs) (FromList zs) /\ ~ List.In code xs.
   Proof.
     intros H.
@@ -652,7 +652,7 @@ Section DefuncRel.
   Local Notation PostGT := (@exposed.PostGT fuel trace).
   Local Notation VTransT := (@exposed.VTransT fuel trace).
 
-  Variables (L : M.t (list ctor_tag)) (T : M.t (var * web * nat)) (Btop Btop' : fundefs).
+  Variables (L : WM.t (list ctor_tag)) (T : M.t (var * web * nat)) (Btop Btop' : fundefs).
 
   Local Notation Code := (Code Btop).
   Local Notation trans := (trans L T Btop).
@@ -661,7 +661,7 @@ Section DefuncRel.
 
   (** The tags of a lambda set belong to the same inductive type *)
   Hypothesis HL :
-    forall w lams, L ! w = Some lams ->
+    forall w lams, WM.get w L = Some lams ->
                    exists it, Forall (fun c => exists info, M.get c cenv = Some info /\
                                                             term.ctor_ind_tag info = it) lams.
 
@@ -675,8 +675,8 @@ Section DefuncRel.
       | Vfun rho1 B1 f1, Vconstr w c vs2 =>
           exists xs zs lams code wc vcode vzs,
             find_def f1 B1 = Some (w, xs, Eapp code wc (xs ++ zs)) /\
-            L ! w = Some lams /\ List.In c lams /\ T ! c = Some (code, wc, length zs) /\
-            exposedb wc = false /\ L ! wc = None /\
+            WM.get w L = Some lams /\ List.In c lams /\ T ! c = Some (code, wc, length zs) /\
+            exposedb wc = false /\ WM.get wc L = None /\
             NoDup xs /\ Disjoint _ (FromList xs) (FromList zs) /\ ~ List.In code xs /\
             M.get code (def_funs B1 B1 rho1 rho1) = Some vcode /\
             get_list zs (def_funs B1 B1 rho1 rho1) = Some vzs /\
@@ -712,7 +712,7 @@ Section DefuncRel.
   Qed.
 
   Lemma dispatch_cc w alts g call c :
-    L ! w = Some (map alt_tag alts) -> List.In c (map alt_tag alts) ->
+    WM.get w L = Some (map alt_tag alts) -> List.In c (map alt_tag alts) ->
     term_util.caseConsistent cenv
       (erase_branches (map (fun '(c, code, wc, zs) => (c, projs zs w c 0 g (call code wc zs))) alts)) c.
   Proof.
@@ -725,10 +725,10 @@ Section DefuncRel.
   (** The code functions of the tags are defined at the top *)
   Hypothesis HT : forall c code wc n, T ! c = Some (code, wc, n) -> Code code.
 
-  Lemma sel_L_None w : L ! w = None -> sel w = false.
+  Lemma sel_L_None w : WM.get w L = None -> sel w = false.
   Proof. unfold sel_L. intros H; rewrite H; reflexivity. Qed.
 
-  Lemma keeps_unsel w : L ! w = None -> keeps sel w = true.
+  Lemma keeps_unsel w : WM.get w L = None -> keeps sel w = true.
   Proof. intros H. unfold keeps. rewrite sel_L_None; [| eassumption ]. apply orb_true_r. Qed.
 
   Section WithTop.
@@ -762,8 +762,8 @@ Section DefuncRel.
       find_def h B = Some (w, xs, e) -> exposedb w = false -> sel w = true ->
       exists zs lams code wc vcode vzs,
         e = Eapp code wc (xs ++ zs) /\
-        L ! w = Some lams /\ List.In c lams /\ T ! c = Some (code, wc, length zs) /\
-        exposedb wc = false /\ L ! wc = None /\
+        WM.get w L = Some lams /\ List.In c lams /\ T ! c = Some (code, wc, length zs) /\
+        exposedb wc = false /\ WM.get wc L = None /\
         NoDup xs /\ Disjoint _ (FromList xs) (FromList zs) /\ ~ List.In code xs /\
         M.get code (def_funs B B rhoc rhoc) = Some vcode /\
         get_list zs (def_funs B B rhoc rhoc) = Some vzs /\
@@ -1621,10 +1621,10 @@ Section DefuncTop.
 
   Context {fuel : Type} {Hf : @fuel_resource fuel} {trace : Type} {Ht : @trace_resource trace}.
 
-  Variables (L : M.t (list ctor_tag)) (T : M.t (var * web * nat)) (Btop : fundefs).
+  Variables (L : WM.t (list ctor_tag)) (T : M.t (var * web * nat)) (Btop : fundefs).
 
   Hypothesis HL :
-    forall w lams, L ! w = Some lams ->
+    forall w lams, WM.get w L = Some lams ->
                    exists it, Forall (fun c => exists info, M.get c cenv = Some info /\
                                                             term.ctor_ind_tag info = it) lams.
   Hypothesis HT : forall c code wc n, T ! c = Some (code, wc, n) -> Code Btop code.
@@ -1648,3 +1648,268 @@ Section DefuncTop.
   Qed.
 
 End DefuncTop.
+
+(** * Free variables
+
+    The output of defunctionalization only refers to the free variables of
+    the input: code functions are referred to by name, but they are bound at
+    the top of the program.  This is what [web_exp_n] needs to compose the
+    pass with the others. *)
+
+Combined Scheme trans_mutind from trans_mut, trans_bundle_mut.
+
+(** The free variables of the bodies of a bundle, before removing its names *)
+Fixpoint bfv (B : fundefs) : Ensemble var :=
+  match B with
+  | Fcons f w xs e B => (occurs_free e \\ FromList xs) :|: bfv B
+  | Fnil => Empty_set var
+  end.
+
+Lemma occurs_free_fundefs_iff B z :
+  occurs_free_fundefs B z <-> ~ name_in_fundefs B z /\ bfv B z.
+Proof.
+  induction B as [f w xs e B IH |]; simpl.
+  - destruct (occurs_free_fundefs_Fcons f w xs e B) as [Hl Hr]. split.
+    + intros Hz. eapply Hl in Hz. destruct Hz as [z Hz | z Hz]; inv Hz.
+      * split; [ intros Hc; eapply H0; inv Hc; [ now left | now right; right ] |].
+        left. constructor; [ eassumption | intros Hc; eapply H0; now right; left ].
+      * eapply IH in H. destruct H as [Hn Hb]. split; [| now right ].
+        intros Hc; inv Hc; [ eapply H0; eassumption | contradiction ].
+    + intros [Hn Hb]. eapply Hr. inv Hb.
+      * inv H. left. constructor; [ eassumption |].
+        intros Hc; inv Hc; [ eapply Hn; now left |]. inv H.
+        -- contradiction.
+        -- eapply Hn; now right.
+      * right. constructor; [ eapply IH; split; [ intros Hc; eapply Hn; now right | eassumption ] |].
+        intros Hc; eapply Hn; now left.
+  - destruct occurs_free_fundefs_Fnil as [Hl Hr]. split; intros H.
+    + eapply Hl in H. inv H.
+    + destruct H as [_ H]. inv H.
+Qed.
+
+Lemma occurs_free_Efun_iff B e z :
+  occurs_free (Efun B e) z <-> ~ name_in_fundefs B z /\ (occurs_free e z \/ bfv B z).
+Proof.
+  destruct (occurs_free_Efun B e) as [Hl Hr]. split.
+  - intros Hz. eapply Hl in Hz. destruct Hz as [z Hz | z Hz].
+    + eapply occurs_free_fundefs_iff in Hz. destruct Hz. split; eauto.
+    + inv Hz. split; eauto.
+  - intros [Hn [Hz | Hz]]; eapply Hr.
+    + right. constructor; eauto.
+    + left. eapply occurs_free_fundefs_iff. eauto.
+Qed.
+
+Lemma occurs_free_bind_recs rs e z :
+  occurs_free (bind_recs rs e) z ->
+  (occurs_free e z /\ ~ List.In z (rec_names rs)) \/ List.In z (rec_fields rs).
+Proof.
+  induction rs as [| [[[f w] c] zs] rs IH]; simpl; [ intros; left; split; eauto |].
+  intros Hz. eapply occurs_free_Econstr in Hz. unfold rec_fields in *; simpl.
+  destruct Hz as [z Hz | z Hz].
+  - right. eapply in_or_app. now left.
+  - inv Hz. destruct (IH H) as [[Hz Hn] | Hz].
+    + left. split; eauto. intros [Hc | Hc]; [ subst; eapply H0; constructor | contradiction ].
+    + right. eapply in_or_app. now right.
+Qed.
+
+Lemma occurs_free_projs zs w c n g e z :
+  occurs_free (projs zs w c n g e) z -> z = g \/ (occurs_free e z /\ ~ List.In z zs).
+Proof.
+  revert n. induction zs as [| y zs IH]; simpl; intros n Hz; [ right; split; eauto |].
+  eapply occurs_free_Eproj in Hz. destruct Hz as [z Hz | z Hz]; [ inv Hz; now left |].
+  inv Hz. destruct (IH _ H) as [Hg | [Hz Hn]]; [ now left |].
+  right. split; eauto. intros [Hc | Hc]; [ subst; eapply H0; constructor | contradiction ].
+Qed.
+
+Lemma occurs_free_dispatch g w alts call z :
+  occurs_free (dispatch g w alts call) z ->
+  z = g \/ exists c code wc zs, List.In (c, code, wc, zs) alts /\
+                                occurs_free (call code wc zs) z /\ ~ List.In z zs.
+Proof.
+  unfold dispatch. induction alts as [| [[[c code] wc] zs] alts IH]; simpl; intros Hz.
+  - eapply occurs_free_Ecase_nil in Hz. inv Hz. now left.
+  - eapply occurs_free_Ecase_cons in Hz. destruct Hz as [z Hz | z Hz]; [ inv Hz; now left |].
+    destruct Hz as [z Hz | z Hz].
+    + destruct (occurs_free_projs _ _ _ _ _ _ _ Hz) as [Hg | [Hz' Hn]]; [ now left |].
+      right. do 4 eexists. split; [ now left | eauto ].
+    + destruct (IH Hz) as [Hg | (c' & code' & wc' & zs' & Hin & Hz' & Hn)]; [ now left |].
+      right. do 4 eexists. split; [ now right | eauto ].
+Qed.
+
+Lemma occurs_free_fun_recs Bk rs e z :
+  occurs_free (fun_recs Bk rs e) z ->
+  ~ name_in_fundefs Bk z /\ (occurs_free (bind_recs rs e) z \/ bfv Bk z).
+Proof.
+  unfold fun_recs. destruct Bk; [| destruct rs ];
+    try (intros Hz; eapply occurs_free_Efun_iff in Hz; exact Hz).
+  intros Hz. split; [ intros Hc; inv Hc | now left ].
+Qed.
+
+Lemma rec_fields_cons f w c zs rs : rec_fields ((f, w, c, zs) :: rs) = zs ++ rec_fields rs.
+Proof. reflexivity. Qed.
+
+Section DefuncFV.
+
+  Variables (L : WM.t (list ctor_tag)) (T : M.t (var * web * nat)) (Btop : fundefs).
+
+  (** The code functions of the lambda sets are among [Btop] *)
+  Hypothesis (HT : forall c code wc n, T ! c = Some (code, wc, n) -> Code Btop code).
+
+  Local Notation Code := (Code Btop).
+
+  Lemma alts_ok_code w alts avoid c code wc zs :
+    alts_ok L T Btop w alts avoid -> List.In (c, code, wc, zs) alts -> Code code.
+  Proof.
+    intros [_ Hall] Hin. eapply Forall_forall in Hall; [| exact Hin ]. simpl in Hall.
+    destruct Hall as [HTc _]. eapply HT; eassumption.
+  Qed.
+
+  Lemma trans_fv :
+    (forall e e', trans L T Btop e e' ->
+                  forall z, occurs_free e' z -> occurs_free e z \/ Code z) /\
+    (forall rs0 B Bk rs, trans_bundle L T Btop rs0 B Bk rs ->
+       (forall z, bfv Bk z ->
+                  ((bfv B z \/ Code z) /\ ~ List.In z (rec_names rs0)) \/ List.In z (rec_fields rs0)) /\
+       (forall z, List.In z (rec_fields rs) -> bfv B z) /\
+       (forall z, name_in_fundefs B z <-> name_in_fundefs Bk z \/ List.In z (rec_names rs))).
+  Proof.
+    eapply trans_mutind.
+    - (* Econstr *)
+      intros x w t ys e e' Hx Ht IH z Hz.
+      eapply occurs_free_Econstr in Hz. destruct Hz as [z Hz | z [Hz Hn]].
+      + left. eapply occurs_free_Econstr. now left.
+      + destruct (IH _ Hz) as [Hz' | Hz']; [| now right ].
+        left. eapply occurs_free_Econstr. right. constructor; eauto.
+    - (* Eproj *)
+      intros x w t n y e e' Hx Ht IH z Hz.
+      eapply occurs_free_Eproj in Hz. destruct Hz as [z Hz | z [Hz Hn]].
+      + left. eapply occurs_free_Eproj. now left.
+      + destruct (IH _ Hz) as [Hz' | Hz']; [| now right ].
+        left. eapply occurs_free_Eproj. right. constructor; eauto.
+    - (* Ecase nil *) intros x w z Hz. now left.
+    - (* Ecase cons *)
+      intros x w c e e' cl cl' Ht IH Htc IHc z Hz.
+      eapply occurs_free_Ecase_cons in Hz. destruct Hz as [z Hz | z [? Hz | ? Hz]].
+      + left. eapply occurs_free_Ecase_cons. now left.
+      + destruct (IH _ Hz) as [Hz' | Hz']; [| now right ].
+        left. eapply occurs_free_Ecase_cons. right. now left.
+      + destruct (IHc _ Hz) as [Hz' | Hz']; [| now right ].
+        left. eapply occurs_free_Ecase_cons. right. now right.
+    - (* Eletapp, kept *)
+      intros x f w ys e e' Hk Hx Ht IH z Hz.
+      eapply occurs_free_Eletapp in Hz. destruct Hz as [z Hz | z [Hz Hn]].
+      + left. eapply occurs_free_Eletapp. now left.
+      + destruct (IH _ Hz) as [Hz' | Hz']; [| now right ].
+        left. eapply occurs_free_Eletapp. right. constructor; eauto.
+    - (* Eletapp, continuation duplicated *)
+      intros x f w ys e e' alts Hw Hx Ha Ht IH z Hz.
+      eapply occurs_free_dispatch in Hz.
+      destruct Hz as [Hz | (c & code & wc & zs & Hin & Hz & Hn)].
+      + subst. left. eapply occurs_free_Eletapp. left. now left.
+      + eapply occurs_free_Eletapp in Hz. destruct Hz as [? [? Hz | ? Hz] | ? [Hz Hnx]].
+        * inv Hz. right. eapply alts_ok_code; eauto.
+        * eapply in_app_or in Hz. destruct Hz as [Hz | Hz]; [| contradiction ].
+          left. eapply occurs_free_Eletapp. left. now right.
+        * destruct (IH _ Hz) as [Hz' | Hz']; [| now right ].
+          left. eapply occurs_free_Eletapp. right. constructor; eauto.
+    - (* Eletapp, join point *)
+      intros x f w ys e e' alts j wj Hw Hx Hwj Hj Hjx Hjf Hjys Hje Ha Ht IH z Hz.
+      eapply occurs_free_Efun_iff in Hz. destruct Hz as [Hnj [Hz | Hz]].
+      + eapply occurs_free_dispatch in Hz.
+        destruct Hz as [Hz | (c & code & wc & zs & Hin & Hz & Hn)].
+        * subst. left. eapply occurs_free_Eletapp. left. now left.
+        * eapply occurs_free_Eletapp in Hz. destruct Hz as [? [? Hz | ? Hz] | ? [Hz Hnx]].
+          -- inv Hz. right. eapply alts_ok_code; eauto.
+          -- eapply in_app_or in Hz. destruct Hz as [Hz | Hz]; [| contradiction ].
+             left. eapply occurs_free_Eletapp. left. now right.
+          -- exfalso. eapply occurs_free_Eapp in Hz. destruct Hz as [z Hz | z Hz].
+             ++ destruct Hz as [Hz | []]. subst. eapply Hnx. constructor.
+             ++ inv Hz. eapply Hnj. now left.
+      + simpl in Hz. destruct Hz as [? [Hz Hnx] | ? Hz]; [| inv Hz ].
+        destruct (IH _ Hz) as [Hz' | Hz']; [| now right ].
+        left. eapply occurs_free_Eletapp. right. constructor; eauto.
+        intros Hc; inv Hc. eapply Hnx. now left.
+    - (* Eapp, kept *) intros f w ys Hk z Hz. now left.
+    - (* Eapp, dispatched *)
+      intros f w ys alts Hw Ha z Hz.
+      eapply occurs_free_dispatch in Hz.
+      destruct Hz as [Hz | (c & code & wc & zs & Hin & Hz & Hn)].
+      + subst. left. eapply occurs_free_Eapp. now right.
+      + eapply occurs_free_Eapp in Hz. destruct Hz as [z Hz | z Hz].
+        * eapply in_app_or in Hz. destruct Hz as [Hz | Hz]; [| contradiction ].
+          left. eapply occurs_free_Eapp. now left.
+        * inv Hz. right. eapply alts_ok_code; eauto.
+    - (* Efun *)
+      intros B Bk rs e e' Hb IHb Hnd Hdc Hdr Ht IH z Hz.
+      destruct IHb as (Hbk & Hfields & Hnames).
+      eapply occurs_free_fun_recs in Hz. destruct Hz as [Hnk [Hz | Hz]].
+      + eapply occurs_free_bind_recs in Hz. destruct Hz as [[Hz Hnr] | Hz].
+        * destruct (IH _ Hz) as [Hz' | Hz']; [| now right ].
+          left. eapply occurs_free_Efun_iff. split; [| now left ].
+          intros Hc. eapply Hnames in Hc. destruct Hc; contradiction.
+        * left. eapply occurs_free_Efun_iff. split; [| right; eapply Hfields; eassumption ].
+          intros Hc. eapply Hnames in Hc. destruct Hc as [Hc | Hc]; [ contradiction |].
+          eapply Hdr; constructor; eassumption.
+      + destruct (Hbk _ Hz) as [[[Hb' | Hb'] Hnr] | Hb']; [| now right |].
+        * left. eapply occurs_free_Efun_iff. split; [| now right ].
+          intros Hc. eapply Hnames in Hc. destruct Hc; contradiction.
+        * left. eapply occurs_free_Efun_iff. split; [| right; eapply Hfields; eassumption ].
+          intros Hc. eapply Hnames in Hc. destruct Hc as [Hc | Hc]; [ contradiction |].
+          eapply Hdr; constructor; eassumption.
+    - intros x p e z Hz. now left.
+    - intros x p ys e z Hz. now left.
+    - intros x z Hz. now left.
+    - (* TB_nil *)
+      intros rs0. split; [| split ]; simpl.
+      + intros z Hz. inv Hz.
+      + intros z [].
+      + intros z. split; intros H; [ inv H | destruct H as [H | []]; inv H ].
+    - (* TB_keep *)
+      intros rs0 f w xs e e' B Bk rs Hk Hd Ht IH Hb IHb.
+      destruct IHb as (Hbk & Hfields & Hnames). split; [| split ].
+      + intros z Hz. simpl in Hz. destruct Hz as [? [Hz Hnx] | ? Hz].
+        * eapply occurs_free_bind_recs in Hz. destruct Hz as [[Hz Hnr] | Hz]; [| now right ].
+          left. split; [| eassumption ].
+          destruct (IH _ Hz) as [Hz' | Hz']; [| now right ].
+          left. left. constructor; eassumption.
+        * destruct (Hbk _ Hz) as [[[Hb' | Hb'] Hnr] | Hb']; [| | now right ].
+          -- left. split; [ left; now right | eassumption ].
+          -- left. split; [ now right | eassumption ].
+      + intros z Hz. right. eapply Hfields. eassumption.
+      + intros z. simpl. split.
+        * intros Hz. destruct Hz as [z Hz | z Hz]; [ left; now left |].
+          eapply Hnames in Hz. destruct Hz; [ left; now right | now right ].
+        * intros [Hz | Hz]; [ destruct Hz as [z Hz | z Hz]; [ now left | right; eapply Hnames; now left ] |].
+          right. eapply Hnames. now right.
+    - (* TB_sel *)
+      intros rs0 f w xs zs B Bk rs lams c code wc Hw HL Hin HTc Hc Hwc HLc Hnd Hdxz Hcx Hb IHb.
+      destruct IHb as (Hbk & Hfields & Hnames). split; [| split ].
+      + intros z Hz. destruct (Hbk _ Hz) as [[[Hb' | Hb'] Hnr] | Hb']; [| | now right ].
+        * left. split; [ left; now right | eassumption ].
+        * left. split; [ now right | eassumption ].
+      + intros z Hz. rewrite rec_fields_cons in Hz. eapply in_app_or in Hz. destruct Hz as [Hz | Hz].
+        * left. constructor.
+          -- eapply occurs_free_Eapp. left. eapply in_or_app. now right.
+          -- intros Hc'. eapply Hdxz; constructor; eassumption.
+        * right. eapply Hfields. eassumption.
+      + intros z. simpl. split.
+        * intros Hz. destruct Hz as [z Hz | z Hz]; [ inv Hz; right; now left |].
+          eapply Hnames in Hz. destruct Hz; [ now left | right; now right ].
+        * intros [Hz | [Hz | Hz]]; [ right; eapply Hnames; now left | subst; left; constructor |].
+          right. eapply Hnames. now right.
+  Qed.
+
+  Lemma trans_top_preserves_fv e et : trans_top L T Btop e et -> preserves_fv e et.
+  Proof.
+    intros (e0 & Btop' & e0' & -> & -> & HB & Hnd & Htr) z Hz.
+    destruct (proj2 trans_fv _ _ _ _ HB) as (Hbk & _ & Hnames).
+    eapply occurs_free_Efun_iff in Hz. destruct Hz as [Hn Hz].
+    assert (Hnc : ~ Code z).
+    { intros Hc. eapply Hnames in Hc. destruct Hc as [Hc | []]. contradiction. }
+    eapply occurs_free_Efun_iff. split; [ exact Hnc |].
+    destruct Hz as [Hz | Hz].
+    - destruct (proj1 trans_fv _ _ Htr _ Hz); [ now left | contradiction ].
+    - destruct (Hbk _ Hz) as [[[Hb | Hb] _] | []]; [ now right | contradiction ].
+  Qed.
+
+End DefuncFV.

@@ -71,7 +71,7 @@ Section Erase.
           find_def f1 B1 = Some (w, xs1, e1) ->
           Some rho1' = set_lists xs1 vs1 (def_funs B1 B1 rho1 rho1) ->
           exists xs2 e2 rho2',
-            term.find_def f2 B2 = Some (w, xs2, e2) /\
+            term.find_def f2 B2 = Some (web_tag w, xs2, e2) /\
             Some rho2' = set_lists xs2 vs2 (term.def_funs B2 B2 rho2 rho2) /\
             (j < k ->
              (exposedb w = true -> Forall exposed_val vs1) ->
@@ -333,7 +333,7 @@ Section Erase.
       set_lists xs vs (def_funs B B rhoc1 rhoc1) = Some rhoc1' ->
       PG (e1, rhoc1', c1, cout1) (e2, rhoc2, c2, cout2) ->
       P (Eapp f w ys, rho1, c1 <+> one_w (Eapp f w ys), cout1 <+> one_w (Eapp f w ys))
-        (term.Eapp f w ys, rho2, c2 <+> one (term.Eapp f w ys), cout2 <+> one (term.Eapp f w ys)).
+        (term.Eapp f (web_tag w) ys, rho2, c2 <+> one (term.Eapp f (web_tag w) ys), cout2 <+> one (term.Eapp f (web_tag w) ys)).
 
   Definition post_e_letapp (P1 P2 PG : PostT_e) :=
     forall x f f' w ys e1 rho1 e2 rho2 xs e_b1 v1 e_b2 v2
@@ -346,7 +346,7 @@ Section Erase.
       PG (e_b1, rhoc1', c1, cout1) (e_b2, rhoc2, c2, cout2) ->
       P1 (e1, M.set x v1 rho1, c1', cout1') (e2, M.set x v2 rho2, c2', cout2') ->
       P2 (Eletapp x f w ys e1, rho1, c1 <+> c1' <+> one_w (Eletapp x f w ys e1), cout1 <+> cout1' <+> one_w (Eletapp x f w ys e1))
-         (term.Eletapp x f' w ys e2, rho2, c2 <+> c2' <+> one (term.Eletapp x f' w ys e2), cout2 <+> cout2' <+> one (term.Eletapp x f' w ys e2)).
+         (term.Eletapp x f' (web_tag w) ys e2, rho2, c2 <+> c2' <+> one (term.Eletapp x f' (web_tag w) ys e2), cout2 <+> cout2' <+> one (term.Eletapp x f' (web_tag w) ys e2)).
 
   Definition post_e_letapp_OOT (P2 PG : PostT_e) :=
     forall x f f' w ys e1 rho1 e2 rho2 xs e_b1 e_b2 rhoc1 rhoc2 B h vs rhoc1' c1 c2 cout1 cout2,
@@ -356,7 +356,7 @@ Section Erase.
       set_lists xs vs (def_funs B B rhoc1 rhoc1) = Some rhoc1' ->
       PG (e_b1, rhoc1', c1, cout1) (e_b2, rhoc2, c2, cout2) ->
       P2 (Eletapp x f w ys e1, rho1, c1 <+> one_w (Eletapp x f w ys e1), cout1 <+> one_w (Eletapp x f w ys e1))
-         (term.Eletapp x f' w ys e2, rho2, c2 <+> one (term.Eletapp x f' w ys e2), cout2 <+> one (term.Eletapp x f' w ys e2)).
+         (term.Eletapp x f' (web_tag w) ys e2, rho2, c2 <+> one (term.Eletapp x f' (web_tag w) ys e2), cout2 <+> one (term.Eletapp x f' (web_tag w) ys e2)).
 
   Class Post_properties_e (P1 P2 PG : PostT_e) : Prop :=
     { HPe_con : post_e_constr P1 P2;
@@ -587,7 +587,7 @@ Section Erase.
         (Hcompat : post_e_app P2 PG) (HOOT : post_e_OOT P2) :
     var_rel k rho1 rho2 f f ->
     Forall (fun y => var_rel k rho1 rho2 y y) ys ->
-    E P2 ex k (Eapp f w ys, rho1) (term.Eapp f w ys, rho2).
+    E P2 ex k (Eapp f w ys, rho1) (term.Eapp f (web_tag w) ys, rho2).
   Proof.
     intros Hfun Hall r1 cin cout Hleq Hstep. inv Hstep.
     - exists aOOT, cin, <0>. split; [ constructor; eassumption |].
@@ -615,7 +615,7 @@ Section Erase.
     Forall (fun y => var_rel k rho1 rho2 y y) ys ->
     (forall m v1 v2, m < k -> (exposedb w = true -> exposed_val v1) -> V m v1 v2 ->
                      E P1 ex m (e1, M.set x v1 rho1) (e2, M.set x v2 rho2)) ->
-    E P2 ex k (Eletapp x f w ys e1, rho1) (term.Eletapp x f' w ys e2, rho2).
+    E P2 ex k (Eletapp x f w ys e1, rho1) (term.Eletapp x f' (web_tag w) ys e2, rho2).
   Proof.
     intros Hfun Hall Hk r1 cin cout Hleq Hstep. inv Hstep.
     - exists aOOT, cin, <0>. split; [ constructor; eassumption |].
@@ -830,8 +830,7 @@ Section Erase.
 
   (** ** Linking (Lemma 7.8) *)
 
-  Variable (lft : web).
-  Hypothesis (Hlft : exposedb lft = true).
+  Variable (lft : term.fun_tag).
 
   Theorem E_erase_preserves_linking x e1 e2 e1' e2' :
     closed_exp e1 ->
@@ -855,7 +854,7 @@ Section Erase.
       rewrite peq_true in Hfind. inv Hfind. destruct vs1; simpl in Hset; try congruence.
       destruct vs2; simpl in Hlen; try congruence. inv Hset.
       do 3 eexists. split; [ simpl; rewrite peq_true; reflexivity | split; [ reflexivity |] ].
-      intros Hj Hexpv Hall. rewrite Hlft.
+      intros Hj Hexpv Hall. change (exposedb (Exposed lft)) with true.
       eapply E_e_post_mono; [ eassumption |].
       eapply Hlib.
       + intros z Hz. eapply Hc in Hz. inv Hz.

@@ -43,12 +43,12 @@ Proof.
 Qed.
 
 Definition const_info_eqb (i j : const_info) : bool :=
-  let '(c, w) := i in let '(c', w') := j in Pos.eqb c c' && Pos.eqb w w'.
+  let '(c, w) := i in let '(c', w') := j in Pos.eqb c c' && web_eqb w w'.
 
 Lemma const_info_eqb_spec i j : const_info_eqb i j = true -> i = j.
 Proof.
   destruct i as [c w], j as [c' w']. simpl. intros H. apply andb_true_iff in H.
-  destruct H as [H1 H2]. apply Pos.eqb_eq in H1, H2. subst. reflexivity.
+  destruct H as [H1 H2]. apply Pos.eqb_eq in H1; apply web_eqb_eq in H2. subst. reflexivity.
 Qed.
 
 Fixpoint const_okb (K : M.t const_info) (ys : list var) (cs : list (option const_info)) : bool :=
@@ -70,10 +70,10 @@ Qed.
 
 Section Transform.
 
-  Variable (Lc : M.t (list (option const_info))).
+  Variable (Lc : WM.t (list (option const_info))).
 
   Definition cp_cs (w : web) : list (option const_info) :=
-    match Lc ! w with Some cs => cs | None => [] end.
+    match WM.get w Lc with Some cs => cs | None => [] end.
 
   Definition cp_args {A} (w : web) (ys : list A) : list A :=
     if keeps (sel_L Lc) w then ys else live_args ys (cmask (cp_cs w)).
@@ -143,10 +143,10 @@ Section Transform.
 
   Variable (Gb : nat).
 
-  Lemma cp_cs_sel w : keeps (sel_L Lc) w = false -> exposedb w = false /\ Lc ! w = Some (cp_cs w).
+  Lemma cp_cs_sel w : keeps (sel_L Lc) w = false -> exposedb w = false /\ WM.get w Lc = Some (cp_cs w).
   Proof.
     intros H. apply keeps_internal in H. destruct H as [Hw Hs]. split; [ eassumption |].
-    unfold sel_L, cp_cs in *. destruct (Lc ! w); congruence.
+    unfold sel_L, cp_cs in *. destruct (WM.get w Lc); congruence.
   Qed.
 
   Lemma cp_trans :
@@ -219,10 +219,10 @@ End Transform.
 
 (** With no selected web, the checker always succeeds. *)
 Lemma cp_ok_empty :
-  (forall e K, cp_ok (M.empty _) K e = true) /\ (forall B K, cp_ok_fd (M.empty _) K B = true).
+  (forall e K, cp_ok (WM.empty _) K e = true) /\ (forall B K, cp_ok_fd (WM.empty _) K B = true).
 Proof.
-  assert (Hk : forall w, keeps (sel_L (M.empty (list (option const_info)))) w = true).
-  { intros w. unfold keeps, sel_L. rewrite M.gempty. apply orb_true_r. }
+  assert (Hk : forall w, keeps (sel_L (WM.empty (list (option const_info)))) w = true).
+  { intros w. unfold keeps, sel_L. rewrite WM.gempty. apply orb_true_r. }
   eapply exp_fundefs_ind; simpl; intros; rewrite ?Hk; simpl;
     repeat match goal with
            | [ IH : forall K, ?g K ?x = true |- context [ ?g ?K' ?x ] ] => rewrite IH
@@ -245,34 +245,34 @@ Fixpoint meet_list (l1 l2 : list (option const_info)) : list (option const_info)
   | _, _ => []
   end.
 
-Definition add_call (w : web) (info : list (option const_info)) (tbl : M.t centry) : M.t centry :=
-  match tbl ! w with
-  | None => M.set w (Some info) tbl
+Definition add_call (w : web) (info : list (option const_info)) (tbl : WM.t centry) : WM.t centry :=
+  match WM.get w tbl with
+  | None => WM.set w (Some info) tbl
   | Some None => tbl
   | Some (Some info') =>
-      if Nat.eqb (length info') (length info) then M.set w (Some (meet_list info' info)) tbl
-      else M.set w None tbl
+      if Nat.eqb (length info') (length info) then WM.set w (Some (meet_list info' info)) tbl
+      else WM.set w None tbl
   end.
 
 (** Arity of the functions of a web; [None] if they disagree or have repeated parameters *)
-Definition add_fun (w : web) (xs : list var) (tbl : M.t (option nat)) : M.t (option nat) :=
+Definition add_fun (w : web) (xs : list var) (tbl : WM.t (option nat)) : WM.t (option nat) :=
   if nodupb xs then
-    match tbl ! w with
-    | None => M.set w (Some (length xs)) tbl
+    match WM.get w tbl with
+    | None => WM.set w (Some (length xs)) tbl
     | Some None => tbl
-    | Some (Some n) => if Nat.eqb n (length xs) then tbl else M.set w None tbl
+    | Some (Some n) => if Nat.eqb n (length xs) then tbl else WM.set w None tbl
     end
-  else M.set w None tbl.
+  else WM.set w None tbl.
 
 Section Analysis.
 
   (** The constants of the previous round, for the parameters *)
-  Variable (Lprev : M.t (list (option const_info))).
+  Variable (Lprev : WM.t (list (option const_info))).
 
   Definition prev_cs (w : web) : list (option const_info) :=
-    if exposedb w then [] else match Lprev ! w with Some cs => cs | None => [] end.
+    if exposedb w then [] else match WM.get w Lprev with Some cs => cs | None => [] end.
 
-  Definition tables : Type := (M.t centry * M.t (option nat))%type.
+  Definition tables : Type := (WM.t centry * WM.t (option nat))%type.
 
   Fixpoint collect_cp (K : M.t const_info) (e : exp) (t : tables) : tables :=
     match e with
@@ -299,11 +299,11 @@ Section Analysis.
     | Fnil => t
     end.
 
-  Definition analyze (e : exp) : M.t (list (option const_info)) :=
-    let '(calls, funs) := collect_cp (M.empty _) e (M.empty _, M.empty _) in
+  Definition analyze (e : exp) : WM.t (list (option const_info)) :=
+    let '(calls, funs) := collect_cp (M.empty _) e (WM.empty _, WM.empty _) in
     M.map_filter1 (fun o => o)
-      (M.map (fun w (ce : centry) =>
-                match ce, funs ! w with
+      (M.map (fun p (ce : centry) => let w := web_of_index p in
+                match ce, WM.get w funs with
                 | Some cs, Some (Some n) =>
                     if Nat.eqb n (length cs) && negb (exposedb w) && existsb (fun o : option const_info => match o with Some _ => true | None => false end) cs then Some cs else None
                 | _, _ => None
@@ -311,18 +311,18 @@ Section Analysis.
 
 End Analysis.
 
-Fixpoint analyze_n (n : nat) (e : exp) : M.t (list (option const_info)) :=
+Fixpoint analyze_n (n : nat) (e : exp) : WM.t (list (option const_info)) :=
   match n with
-  | 0 => M.empty _
+  | 0 => WM.empty _
   | S n => analyze (analyze_n n e) e
   end.
 
 (** The most precise map that the checker accepts *)
-Definition choose_map (e : exp) : M.t (list (option const_info)) :=
+Definition choose_map (e : exp) : WM.t (list (option const_info)) :=
   let cands := [analyze_n 3 e; analyze_n 2 e; analyze_n 1 e] in
   match find (fun Lc => cp_ok Lc (M.empty _) e) cands with
   | Some Lc => Lc
-  | None => M.empty _
+  | None => WM.empty _
   end.
 
 Lemma choose_map_ok e : cp_ok (choose_map e) (M.empty _) e = true.

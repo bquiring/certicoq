@@ -89,10 +89,13 @@ Qed.
 
 Section Transform.
 
-  Variables (L : M.t (list ctor_tag)) (T : M.t (var * web * nat)) (Btop : fundefs).
+  Variables (L : WM.t (list ctor_tag)) (T : M.t (var * web * nat)) (Btop : fundefs).
   Variable (tagof : M.t ctor_tag).   (* the tags of the wrappers *)
   Variable (m : var).                (* the variables above [m] are fresh *)
   Variable (thr : nat).              (* largest continuation that is duplicated *)
+  Variable (jw : positive).          (* the index of the (fresh, internal) web of join points *)
+
+  Definition jweb : web := Internal jw.
 
   Definition in_code (z : var) : bool := memb z (bnames Btop).
 
@@ -111,13 +114,13 @@ Section Transform.
   Definition mk_alt (c : ctor_tag) : alt :=
     match T ! c with
     | Some (code, wc, n) => (c, code, wc, fresh_vars n)
-    | None => (c, 1%positive, 1%positive, [])
+    | None => (c, 1%positive, Internal 1%positive, [])
     end.
 
   Definition alts_of (w : web) : list alt :=
-    match L ! w with Some lams => map mk_alt lams | None => [] end.
+    match WM.get w L with Some lams => map mk_alt lams | None => [] end.
 
-  Lemma alts_of_tags w lams : L ! w = Some lams -> map alt_tag (alts_of w) = lams.
+  Lemma alts_of_tags w lams : WM.get w L = Some lams -> map alt_tag (alts_of w) = lams.
   Proof.
     unfold alts_of. intros H. rewrite H. rewrite map_map.
     erewrite map_ext; [ apply map_id |]. intros c. unfold mk_alt.
@@ -153,8 +156,8 @@ Section Transform.
         else if Nat.leb (esize k) thr then
                dispatch f w (alts_of w) (fun code wc zs => Eletapp x code wc (ys ++ zs) (dfn k))
              else
-               Efun (Fcons jvar w [x] (dfn k) Fnil)
-                    (dispatch f w (alts_of w) (fun code wc zs => Eletapp x code wc (ys ++ zs) (Eapp jvar w [x])))
+               Efun (Fcons jvar jweb [x] (dfn k) Fnil)
+                    (dispatch f w (alts_of w) (fun code wc zs => Eletapp x code wc (ys ++ zs) (Eapp jvar jweb [x])))
     | Eapp f w ys =>
         if sel_w w then Eapp f w ys
         else dispatch f w (alts_of w) (fun code wc zs => Eapp code wc (ys ++ zs))
@@ -173,7 +176,7 @@ Section Transform.
   (** ** The checker *)
 
   Definition alts_okb (w : web) (avoid : var -> bool) : bool :=
-    match L ! w with
+    match WM.get w L with
     | Some lams =>
         forallb (fun c => match T ! c with
                           | Some (code, wc, n) =>
@@ -186,11 +189,11 @@ Section Transform.
 
   (** The wrapper conditions of [TB_sel] *)
   Definition wrapper_okb (f : var) (w : web) (xs : list var) (e : exp) : bool :=
-    match wrapper_fields xs e, tagof ! f, L ! w with
+    match wrapper_fields xs e, tagof ! f, WM.get w L with
     | Some (code, wc, zs), Some c, Some lams =>
         memb c lams &&
         match T ! c with
-        | Some (code', wc', n) => Pos.eqb code code' && Pos.eqb wc wc' && Nat.eqb n (length zs)
+        | Some (code', wc', n) => Pos.eqb code code' && web_eqb wc wc' && Nat.eqb n (length zs)
         | None => false
         end &&
         in_code code && negb (exposedb wc) && negb (sel_L L wc) &&
@@ -242,7 +245,7 @@ Section Transform.
     (forall z, avoid z = false -> ~ S z) ->
     alts_okb w avoid = true -> alts_ok L T Btop w (alts_of w) S.
   Proof.
-    unfold alts_okb. intros HS H. destruct (L ! w) as [lams |] eqn:HL; [| discriminate ].
+    unfold alts_okb. intros HS H. destruct (WM.get w L) as [lams |] eqn:HL; [| discriminate ].
     split; [ rewrite (alts_of_tags w lams HL); exact HL |].
     unfold alts_of. rewrite HL. eapply Forall_forall. intros a Ha.
     eapply in_map_iff in Ha. destruct Ha as (c & <- & Hc).
@@ -296,6 +299,7 @@ Section Transform.
                  end.
           econstructor; try eassumption.
           -- eapply in_code_false; eassumption.
+          -- reflexivity.
           -- eapply in_code_false; eassumption.
           -- intros Hc; subst. rewrite Pos.eqb_refl in *. discriminate.
           -- intros Hc; subst. rewrite Pos.eqb_refl in *. discriminate.
@@ -353,7 +357,7 @@ Section Transform.
       + unfold wrapper_okb in Hf.
         destruct (wrapper_fields xs e) as [[[code wc] zs] |] eqn:Hwf; [| discriminate ].
         destruct (tagof ! f) as [c |] eqn:Htag; [| discriminate ].
-        destruct (L ! w) as [lams |] eqn:HL; [| discriminate ].
+        destruct (WM.get w L) as [lams |] eqn:HL; [| discriminate ].
         destruct (T ! c) as [[[code' wc'] n] |] eqn:HT; [| repeat (rewrite andb_false_r in Hf || rewrite andb_false_l in Hf); discriminate ].
         repeat match goal with
                | [ H : (_ && _) = true |- _ ] => apply andb_true_iff in H; destruct H
@@ -361,13 +365,13 @@ Section Transform.
         repeat match goal with
                | [ H : negb _ = true |- _ ] => apply negb_true_iff in H
                end.
-        apply Pos.eqb_eq in H6. apply Pos.eqb_eq in H8. apply Nat.eqb_eq in H7. subst code' wc' n.
+        apply Pos.eqb_eq in H6. apply web_eqb_eq in H8. apply Nat.eqb_eq in H7. subst code' wc' n.
         rewrite (wrapper_fields_spec _ _ _ _ _ Hwf).
         econstructor; eauto.
         * eapply sel_w_false; eassumption.
         * eapply memb_spec; eassumption.
         * eapply in_code_true; eassumption.
-        * unfold sel_L in H3. destruct (L ! wc); [ discriminate | reflexivity ].
+        * unfold sel_L in H3. destruct (WM.get wc L); [ discriminate | reflexivity ].
         * eapply nodupb_spec; eassumption.
         * eapply (forallb_disjoint _ _ (fun z => memb z zs)); [| eassumption ]. intros z Hz. eapply memb_false. exact Hz.
         * eapply memb_false; eassumption.
@@ -412,7 +416,7 @@ Fixpoint fd_webs (B : fundefs) : list web :=
 Definition max_pos (l : list positive) : positive := fold_left Pos.max l 1%positive.
 
 Record dfn_result : Type :=
-  { r_L : M.t (list ctor_tag);
+  { r_L : WM.t (list ctor_tag);
     r_T : M.t (var * web * nat);
     r_tagof : M.t ctor_tag;
     r_cenv : term.ctor_env }.
@@ -431,31 +435,31 @@ Section Analysis.
     end.
 
   (** The webs that cannot be defunctionalized *)
-  Definition bad : M.t unit :=
-    let bad0 := fold_left (fun acc w => M.set w tt acc) (fd_webs Btop) (M.empty unit) in
+  Definition bad : WM.t unit :=
+    let bad0 := fold_left (fun acc w => WM.set w tt acc) (fd_webs Btop) (WM.empty unit) in
     fold_left (fun acc '(f, w, xs, e) =>
                  match code_of xs e with
-                 | Some (_, wc, _) => if exposedb w then M.set w tt (M.set wc tt acc) else M.set wc tt acc
-                 | None => M.set w tt acc
+                 | Some (_, wc, _) => if exposedb w then WM.set w tt (WM.set wc tt acc) else WM.set wc tt acc
+                 | None => WM.set w tt acc
                  end) inner_funs bad0.
 
-  Definition is_bad (w : web) : bool := match bad ! w with Some _ => true | None => false end.
+  Definition is_bad (w : web) : bool := match WM.get w bad with Some _ => true | None => false end.
 
   Definition tag_base : positive := Pos.succ (max_pos (map fst (M.elements cenv))).
   Definition ind_base : positive := Pos.succ (max_pos (map (fun p => term.ctor_ind_tag (snd p)) (M.elements cenv))).
 
   (** Tags of the wrappers, lambda sets, and the table of code functions *)
-  Definition assign : M.t ctor_tag * M.t (list ctor_tag) * M.t (var * web * nat) * positive :=
+  Definition assign : M.t ctor_tag * WM.t (list ctor_tag) * M.t (var * web * nat) * positive :=
     fold_left (fun '(tagof, L, T, c) '(f, w, xs, e) =>
                  if is_bad w then (tagof, L, T, c)
                  else match tagof ! f, code_of xs e with
                       | None, Some (code, wc, zs) =>
                           (M.set f c tagof,
-                           M.set w (match L ! w with Some lams => lams ++ [c] | None => [c] end) L,
+                           WM.set w (match WM.get w L with Some lams => lams ++ [c] | None => [c] end) L,
                            M.set c (code, wc, length zs) T,
                            Pos.succ c)
                       | _, _ => (tagof, L, T, c)
-                      end) inner_funs (M.empty _, M.empty _, M.empty _, tag_base).
+                      end) inner_funs (M.empty _, WM.empty _, M.empty _, tag_base).
 
   (** One fresh inductive type per selected web *)
   Definition new_ctors : list (ctor_tag * term.ctor_ty_info) :=
@@ -471,7 +475,7 @@ Section Analysis.
                                                                end;
                                             term.ctor_ordinal := N.of_nat i |}))
                                   (combine (seq 0 (length lams)) lams),
-                       Pos.succ it)) (M.elements L) ([], ind_base)).
+                       Pos.succ it)) (WM_elements L) ([], ind_base)).
 
   Definition analyze_dfn : dfn_result :=
     let '(tagof, L, T, _) := assign in
@@ -487,7 +491,7 @@ Proof. unfold analyze_dfn. destruct (assign cenv Btop e0) as [[[? ?] ?] ?]. refl
 
 (** ** Checks of the hypotheses of the correctness theorem *)
 
-Definition hl_check (cenv : term.ctor_env) (L : M.t (list ctor_tag)) : bool :=
+Definition hl_check (cenv : term.ctor_env) (L : WM.t (list ctor_tag)) : bool :=
   forallb (fun '(w, lams) =>
              match lams with
              | [] => true
@@ -500,15 +504,15 @@ Definition hl_check (cenv : term.ctor_env) (L : M.t (list ctor_tag)) : bool :=
                                        end) lams
                  | None => false
                  end
-             end) (M.elements L).
+             end) (WM_elements L).
 
 Lemma hl_check_spec cenv L :
   hl_check cenv L = true ->
-  forall w lams, L ! w = Some lams ->
+  forall w lams, WM.get w L = Some lams ->
                  exists it, Forall (fun c => exists info, M.get c cenv = Some info /\
                                                           term.ctor_ind_tag info = it) lams.
 Proof.
-  intros H w lams HL. eapply M.elements_correct in HL.
+  intros H w lams HL. eapply WM_elements_correct in HL.
   eapply forallb_forall in H; [| exact HL ]. simpl in H.
   destruct lams as [| c0 lams]; [ exists 1%positive; constructor |].
   destruct (cenv ! c0) as [i0 |] eqn:Hc0; [| discriminate ].
@@ -549,6 +553,30 @@ Qed.
 
 Definition dfn_thr : nat := 10.
 
+(** The largest index of an internal web of a program: the join points get a
+    fresh internal web above it. *)
+Definition iweb (w : web) : positive := match w with Internal p => p | Exposed _ => 1%positive end.
+
+Fixpoint max_iweb (e : exp) : positive :=
+  match e with
+  | Econstr _ w _ _ k | Eproj _ w _ _ _ k | Eletapp _ _ w _ k => Pos.max (iweb w) (max_iweb k)
+  | Ecase _ w cl =>
+      (fix go (cl : list (ctor_tag * exp)) :=
+         match cl with
+         | [] => iweb w
+         | (_, e) :: cl => Pos.max (max_iweb e) (go cl)
+         end) cl
+  | Efun B k => Pos.max (max_iweb_fd B) (max_iweb k)
+  | Eapp _ w _ => iweb w
+  | Eprim_val _ _ k | Eprim _ _ _ k => max_iweb k
+  | Ehalt _ => 1%positive
+  end
+with max_iweb_fd (B : fundefs) : positive :=
+  match B with
+  | Fcons _ w _ e B => Pos.max (iweb w) (Pos.max (max_iweb e) (max_iweb_fd B))
+  | Fnil => 1%positive
+  end.
+
 Definition dfn_top (cenv : term.ctor_env) (e : exp) : term.ctor_env * exp :=
   match e with
   | Efun Btop e0 =>
@@ -557,10 +585,11 @@ Definition dfn_top (cenv : term.ctor_env) (e : exp) : term.ctor_env * exp :=
       let T := r_T r in
       let tagof := r_tagof r in
       let m := identifiers.max_var (erase e) 1%positive in
+      let jw := Pos.succ (max_iweb e) in
       if forallb (sel_w L) (fd_webs Btop) && nodupb (bnames Btop) &&
          dfn_ok_fd L T Btop tagof m dfn_thr [] Btop && dfn_ok L T Btop tagof m dfn_thr e0 &&
          hl_check (r_cenv r) L && ht_check Btop T && ext_check cenv (new_ctors cenv Btop e0)
-      then (r_cenv r, Efun (dfn_fd L T tagof m dfn_thr [] Btop) (dfn L T tagof m dfn_thr e0))
+      then (r_cenv r, Efun (dfn_fd L T tagof m dfn_thr jw [] Btop) (dfn L T tagof m dfn_thr jw e0))
       else (cenv, e)
   | _ => (cenv, e)
   end.
@@ -620,20 +649,21 @@ Proof.
          end.
   set (r := analyze_dfn cenv f e) in *.
   set (m := identifiers.max_var (erase (Efun f e)) 1%positive) in *.
+  set (jw := Pos.succ (max_iweb (Efun f e))) in *.
   assert (Hext : forall c i, cenv ! c = Some i -> (r_cenv r) ! c = Some i).
   { intros c i Hci. unfold r. rewrite r_cenv_eq. eapply ext_check_spec; eauto. }
   assert (Htop : trans_top (r_L r) (r_T r) f (Efun f e)
-                           (Efun (dfn_fd (r_L r) (r_T r) (r_tagof r) m dfn_thr [] f)
-                                 (dfn (r_L r) (r_T r) (r_tagof r) m dfn_thr e))).
+                           (Efun (dfn_fd (r_L r) (r_T r) (r_tagof r) m dfn_thr jw [] f)
+                                 (dfn (r_L r) (r_T r) (r_tagof r) m dfn_thr jw e))).
   { do 3 eexists. split; [ reflexivity | split; [ reflexivity |] ].
     split; [| split ].
     - match goal with
       | [ Hk : forallb (sel_w _) (fd_webs f) = true, Hfd : dfn_ok_fd _ _ _ _ _ _ [] f = true |- _ ] =>
-          pose proof (proj2 (dfn_ok_trans _ _ _ _ _ _) f [] Hfd) as Hb;
+          pose proof (proj2 (dfn_ok_trans _ _ _ _ _ _ jw) f [] Hfd) as Hb;
           rewrite (recs_of_keep _ _ _ Hk) in Hb; exact Hb
       end.
     - rewrite <- bnames_fnames. eapply nodupb_spec. eassumption.
-    - eapply (proj1 (dfn_ok_trans _ _ _ _ _ _)). eassumption. }
+    - eapply (proj1 (dfn_ok_trans _ _ _ _ _ _ jw)). eassumption. }
   pose proof (dfn_refines (r_cenv r) (fuel := nat) (trace := nat * nat) (r_L r) (r_T r) f
                           (hl_check_spec _ _ ltac:(eassumption)) (ht_check_spec _ _ ltac:(eassumption))
                           _ _ Hc Htop) as [Hterm Hdiv].
