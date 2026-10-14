@@ -1,10 +1,11 @@
 (* An implementation of the 0-CFA: a solver, the annotation it induces, and
    a checker of the constraints proven sound.
 
-   The solver is not verified.  It iterates a pass over the program that
-   propagates flows, exposure (escape) and the arguments and results of
-   functions until nothing changes, then merges the internal webs of the
-   labels that share a use site.  The checker decides [ok_top] for the
+   The solver is verified separately ([impl_complete.v]): it always
+   finishes and its solution always passes the check.  It iterates a pass
+   over the program that propagates flows, exposure (escape) and the
+   arguments and results of functions until nothing changes, then merges
+   the internal webs of the labels that share a use site.  The checker decides [ok_top] for the
    annotation of the solution; when it fails, the analysis falls back to
    the trivial solution, in which every value is exposed.  So [annotate]
    always inhabits the annotation relation ([annotate_correct]). *)
@@ -775,7 +776,7 @@ Definition sol_of (e : term.exp) (s : st) : sol * aset :=
 (** The rounds of the solver, with fuel one more than the bound on the
     measure *)
 Definition solve_loop (e : term.exp) : res st :=
-  let vs := vars_acc e PS.empty in
+  let vs := vars_acc e (identifiers.exp_fv e) in
   let Ks := PS.elements vs in
   let U := ulabels vs in
   let N := arity e in

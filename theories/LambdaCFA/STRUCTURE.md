@@ -13,7 +13,7 @@ open, and it is linked against unknown code.
 | `spec.v` | Labels, abstract values (sets of labels, possibly infinite), solutions, and the constraints `ok`/`ok_top` that relate a λANF program to its annotation |
 | `sound.v` | The step-indexed cross-language relation indexed by abstract values; import/export with the interface relation `V_a`; the fundamental property; `ok_top_E_anno`: the constraints imply `E_anno_top`; the postcondition `P_eq` (equal fuel) and its obligations |
 | `impl.v` | The annotation of a solution (`anno`), a checker proven sound (`check_spec`), the trivial solution (`triv_top`), the solver, and `annotate` with `annotate_correct` |
-| `impl_complete.v` | The solver never runs out of fuel (`solve_some`), nor does the merging of internal webs (`merge_done`) |
+| `impl_complete.v` | The solver always finishes (`solve_some`, `merge_done`) and its solution always passes the check (`check_solve`), so the fallback is never taken (`analyze_solve`) |
 | `compile.v` | The compiler of `LambdaWeb/passes.v` with this analysis (`compile_cfa_refines`, assuming only the λANF optimizations); linking of separately annotated units (`annotate_preserves_linking`), including with units annotated by any other analysis proven against `E_anno_top` (`annotate_links_with_lib`, `annotate_links_with_client`) |
 
 Main results: `ok_top_E_anno` (sound.v), `annotate_correct` (impl.v),
@@ -88,7 +88,7 @@ analyses need not coordinate their internal web names.
 
 ## The implementation
 
-The solver (`impl.v`, not verified) iterates a pass over the program until the
+The solver (`impl.v`) iterates a pass over the program until the
 state stops growing.  The pass propagates flows, arguments and results,
 exposure and escape.  It then merges the internal webs of labels that share a
 use site.  A label's internal web is `Internal p` for the smallest label index
@@ -112,8 +112,22 @@ When the check fails, `annotate` falls back
 to the trivial solution, which annotates every value as exposed (`triv_top`).
 So `annotate` is correct for every program.
 
-Since only the checker is trusted, a solver bug costs precision (the
-fallback), never soundness.
+`impl_complete.v` proves that the fallback is never taken
+(`analyze_solve`):
+
+1. Every operation of the solver stays within the universe of the program
+   (`inv`, `round_inv`), so when the measure stops growing the state is a
+   true fixpoint of a round (`fix_le`, `solve_loop_fix`).
+2. Every operation of a round only adds to the state, so in a round that
+   adds nothing, everything each operation would add is already there.  This
+   gives the flow constraints (`step_C`), the escape of the result, the rules
+   for exposed labels and the free variables (`solve_loop_C`).
+3. Merging stops at a pass that changes nothing, so the internal labels of a
+   use site share a web (`merge_fix`).
+4. From these, the checker accepts the solution (`check_solve`).
+
+The checker is still what `annotate_correct` relies on, so the solver is
+proven complete rather than trusted.
 
 ## Limitations
 
@@ -124,8 +138,3 @@ fallback), never soundness.
   web, the encoded label).  The pipeline's correctness does not depend on
   them, but a backend that looks function tags up in a function environment
   would need entries for them.
-* The solver is unverified; only its result is checked.  Its termination
-  is proven, but not that its result passes the check, so the fallback is
-  still reachable in principle.  The loop also stops when the measure within
-  the universe stops growing; that the state never leaves the universe (so
-  this is a true fixpoint) is not proven.
