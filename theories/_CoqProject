@@ -119,12 +119,14 @@ LambdaWeb/erase.v
 LambdaWeb/anno.v
 LambdaWeb/pipeline.v
 LambdaWeb/passes.v
+LambdaWeb/retag.v
 
 # LambdaCFA: a compositional 0-CFA annotating λANF with webs
 LambdaCFA/spec.v
 LambdaCFA/sound.v
 LambdaCFA/impl.v
 LambdaCFA/impl_complete.v
+LambdaCFA/fast.v
 LambdaCFA/compile.v
 
 # Codegen

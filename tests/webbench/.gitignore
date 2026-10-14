@@ -1,0 +1,8 @@
+build/
+CertiRocq.Tests.webbench.*
+glue_*
+*.vo
+*.vok
+*.vos
+*.glob
+.*.aux

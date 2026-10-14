@@ -583,10 +583,12 @@ Section Compose.
     clear. firstorder.
   Qed.
 
+  (** The web optimizations are not covered yet. *)
   Theorem anf_pipeline_correct opts v :
+    webs opts = false ->
     correct_cc cenv clo_tag (anf_pipeline v opts).
   Proof.
-    intros Heq.
+    intros Hwebs Heq.
     unfold anf_pipeline.
     eapply correct_cc_compose_l.
 
@@ -617,6 +619,10 @@ Section Compose.
     eapply correct_cc_compose_l.
 
     eapply correct_time. now eapply shrink_err_correct.
+
+    eapply correct_cc_compose_l.
+
+    rewrite Hwebs. now eapply correct_id_trans.
 
     eapply correct_cc_compose_r.
 
@@ -658,6 +664,8 @@ Section Compose.
   (* Top-level correctness for whole programs *)
   Corollary anf_pipeline_whole_program_correct var opts e c :
 
+    webs opts = false ->
+
     closed_exp e ->
 
     well_scoped e ->
@@ -668,7 +676,7 @@ Section Compose.
 
       refines cenv value_ref_cc e e'.
   Proof.
-    intros.
+    intros Hw. intros.
     edestruct anf_pipeline_correct; eauto. destructAll.
     do 2 eexists.
 
@@ -706,6 +714,8 @@ Section Compose.
   (* Top-level correctness for linking *)
   Corollary anf_pipeline_linking_correct lf x v1 v2 o1 o2 e1 e2 c1 c2 :
 
+    webs o1 = false -> webs o2 = false ->
+
     closed_exp e1 ->
     well_scoped e1 ->
     (max_var e1 1 < state.next_var c1)%positive ->
@@ -720,7 +730,7 @@ Section Compose.
 
       refines cenv value_ref_cc (link lf x e1 e2) (link lf x e1' e2').
   Proof.
-    intros.
+    intros Hw1 Hw2. intros.
     edestruct anf_pipeline_correct with (e := e1) (opts := o1); eauto. destructAll.
     edestruct anf_pipeline_correct with (e := e2) (opts := o2); eauto. destructAll.
 

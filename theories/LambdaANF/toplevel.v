@@ -5,6 +5,8 @@ From CertiRocq Require Import
      LambdaANF.inline LambdaANF.uncurry_proto LambdaANF.closure_conversion
      LambdaANF.closure_conversion LambdaANF.hoisting LambdaANF.dead_param_elim LambdaANF.lambda_lifting.
 From CertiRocq.LambdaBox_to_LambdaANF Require Import common.
+From CertiRocq.LambdaWeb Require syntax retag dpe_impl cp_impl.
+From CertiRocq.LambdaCFA Require impl fast.
 From CertiRocq.LambdaBox_to_LambdaANF Require anf cps.
 (* From CertiRocq.Codegen Require Import LambdaANF_to_Clight. *)
 
@@ -154,6 +156,7 @@ Section IDENT.
       inl_before      : bool;    (* Perform shrink/inline loop before closure conversion *)
       inl_after       : bool;    (* Perform shrink/inline loop after closure conversion *)
       dpe             : bool;    (* Turn it off for the top-level theorm because it does not have a proof yet *)
+      webs            : bool;    (* Web optimizations: 0-CFA, then dead parameters and constants on webs *)
     }.
 
 
@@ -177,6 +180,17 @@ Section IDENT.
 
   Definition id_trans : anf_trans := fun e c => (Ret e, c).
 
+  (** Web optimizations: annotate the program with webs by the 0-CFA, run the
+      λweb passes, and erase the webs, with fresh function tags for the
+      internal webs. *)
+  Definition web_trans : anf_trans :=
+    fun e c =>
+      let 'mkCompData nv nc ni nf cenv fenv names imap log := c in
+      let ew := LambdaWeb.cp_impl.cp_top (LambdaWeb.dpe_impl.dpe_top
+                                           (LambdaCFA.fast.annotate_fast (LambdaWeb.syntax.Exposed 1%positive) e)) in
+      let '(e', s) := LambdaWeb.retag.erase_rt ew (LambdaWeb.retag.mk_rt (M.empty _) nf fenv) in
+      (Ret e', mkCompData nv nc ni (LambdaWeb.retag.rt_next s) cenv (LambdaWeb.retag.rt_fenv s) names imap log).
+
   Section Pipeline.
 
     Context (anf_opts : anf_options).
@@ -197,6 +211,9 @@ Section IDENT.
               time_anf "Lambda lift" (lambda_lift (args anf_opts) (no_push anf_opts) (inl_wrappers anf_opts)) e
             else id_trans e) ;;
       e <- time_anf "Shrink" shrink_err e;;
+      e <- (if webs anf_opts then
+              time_anf "Web optimizations" web_trans e
+            else id_trans e) ;;
       e <- time_anf "Closure conversion and hoisting" (closure_conversion_hoist clo_tag clo_ind_tag) e ;;
       e <- time_anf "Shrink" shrink_err e;;
       e <- (if inl_after anf_opts then
@@ -279,6 +296,7 @@ Section IDENT.
        inl_before   := inl_before;
        inl_after    := inl_after;
        dpe          := true;
+       webs         := (2 <=? o_level opts);
     |}.
 
 

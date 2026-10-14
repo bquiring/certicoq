@@ -14,6 +14,7 @@ open, and it is linked against unknown code.
 | `sound.v` | The step-indexed cross-language relation indexed by abstract values; import/export with the interface relation `V_a`; the fundamental property; `ok_top_E_anno`: the constraints imply `E_anno_top`; the postcondition `P_eq` (equal fuel) and its obligations |
 | `impl.v` | The annotation of a solution (`anno`), a checker proven sound (`check_spec`), the trivial solution (`triv_top`), the solver, and `annotate` with `annotate_correct` |
 | `impl_complete.v` | The solver always finishes (`solve_some`, `merge_done`) and its solution always passes the check (`check_solve`), so the fallback is never taken (`analyze_solve`) |
+| `fast.v` | The solver used by the compiler: a worklist solver that propagates changes along dependencies, and union-find for webs; its solution is checked as before (`annotate_fast_correct`) |
 | `compile.v` | The compiler of `LambdaWeb/passes.v` with this analysis (`compile_cfa_refines`, assuming only the λANF optimizations); linking of separately annotated units (`annotate_preserves_linking`), including with units annotated by any other analysis proven against `E_anno_top` (`annotate_links_with_lib`, `annotate_links_with_client`) |
 
 Main results: `ok_top_E_anno` (sound.v), `annotate_correct` (impl.v),
