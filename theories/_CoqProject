@@ -2,6 +2,7 @@
 -R common               CertiRocq.Common
 -R LambdaANF            CertiRocq.LambdaANF
 -R LambdaWeb            CertiRocq.LambdaWeb
+-R LambdaCFA            CertiRocq.LambdaCFA
 -R LambdaBox_to_LambdaANF CertiRocq.LambdaBox_to_LambdaANF
 -R ../libraries         CertiRocq.Libraries
 -R Codegen              CertiRocq.Codegen
@@ -118,6 +119,12 @@ LambdaWeb/erase.v
 LambdaWeb/anno.v
 LambdaWeb/pipeline.v
 LambdaWeb/passes.v
+
+# LambdaCFA: a compositional 0-CFA annotating λANF with webs
+LambdaCFA/spec.v
+LambdaCFA/sound.v
+LambdaCFA/impl.v
+LambdaCFA/compile.v
 
 # Codegen
 Codegen/tactics.v

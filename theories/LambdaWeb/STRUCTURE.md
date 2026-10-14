@@ -16,8 +16,9 @@ paper's standalone mechanization, it
   at every call), adding webs only to constructors, projections and case
   analyses.
 
-There is no flow analysis: the analysis phase is specified by the annotation
-relation (`anno.v`) and assumed in `pipeline.v`.
+The analysis phase is specified by the annotation relation (`anno.v`) and
+assumed in `pipeline.v`; a compositional 0-CFA inhabiting it is in
+`../LambdaCFA` (see its `STRUCTURE.md`).
 
 ## Files
 
@@ -106,8 +107,6 @@ make LambdaWeb/pipeline.vo LambdaWeb/dpe.vo
 * Linking for the compiler of `passes.v`: defunctionalization extends the
   constructor environment per compilation unit, so separately compiled units
   would have to agree on the new tags.
-* A flow analysis inhabiting the annotation relation (the pipeline assumes
-  one).
 
 ## Defunctionalization (`defunc.v`)
 
