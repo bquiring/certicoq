@@ -537,6 +537,8 @@ extraction/impl.mli
 extraction/impl.ml
 extraction/retag.mli
 extraction/retag.ml
+extraction/erase.mli
+extraction/erase.ml
 extraction/fast.mli
 extraction/fast.ml
 extraction/stats.mli
