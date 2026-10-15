@@ -21,12 +21,6 @@ Close Scope Z_scope.
 
 (** * Bundles with distinct function names *)
 
-Fixpoint nodupb (l : list var) : bool :=
-  match l with
-  | [] => true
-  | x :: l => negb (existsb (Pos.eqb x) l) && nodupb l
-  end.
-
 Lemma nodupb_NoDup l : nodupb l = true -> NoDup l.
 Proof.
   induction l as [| x l IH]; simpl; intros H; [ constructor |].
@@ -43,20 +37,6 @@ Proof.
   apply negb_true_iff. destruct (existsb (Pos.eqb x) l) eqn:Hex; auto.
   apply existsb_exists in Hex as [y [Hy Heq]]. apply Pos.eqb_eq in Heq. subst. contradiction.
 Qed.
-
-Fixpoint fnd (e : exp) : bool :=
-  match e with
-  | Econstr _ _ _ e | Eproj _ _ _ _ e | Eletapp _ _ _ _ e
-  | Eprim_val _ _ e | Eprim _ _ _ e => fnd e
-  | Ecase _ cl => forallb (fun p => fnd (snd p)) cl
-  | Efun B e => nodupb (all_fun_name B) && fnd_fds B && fnd e
-  | Eapp _ _ _ | Ehalt _ => true
-  end
-with fnd_fds (B : fundefs) : bool :=
-  match B with
-  | Fcons _ _ _ e B => fnd e && fnd_fds B
-  | Fnil => true
-  end.
 
 Lemma name_in_fundefs_all_fun_name B : name_in_fundefs B <--> FromList (all_fun_name B).
 Proof.

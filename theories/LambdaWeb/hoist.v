@@ -8,7 +8,10 @@
    the program.  It assumes that the bindings of the program are unique, as
    they are in the compiler's pipeline.
 
-   This pass is not proven yet. *)
+   The pass checks its result: the free variables of each hoisted bundle
+   must be functions of the top bundle, and the program must not gain free
+   variables; otherwise it returns the program unchanged.  It is proven in
+   [hoist_correct.v]. *)
 
 From Stdlib Require Import NArith.BinNat Lists.List Bool.
 Require Import compcert.lib.Coqlib.
@@ -105,6 +108,25 @@ Section Strip.
     | term.Fnil => (term.Fnil, acc)
     end.
 
+  (** The hoisted bundles only refer to the functions [Sset] of the top
+      bundle *)
+  Variable (Sset : PS.t).
+
+  Fixpoint hcheck (e : term.exp) : bool :=
+    match e with
+    | term.Econstr _ _ _ e | term.Eproj _ _ _ _ e | term.Eletapp _ _ _ _ e
+    | term.Eprim_val _ _ e | term.Eprim _ _ _ e => hcheck e
+    | term.Ecase _ cl => forallb (fun p => hcheck (snd p)) cl
+    | term.Efun B e =>
+        (if hoisted B then PS.subset (identifiers.fundefs_fv B) Sset else true) && hcheck_fds B && hcheck e
+    | term.Eapp _ _ _ | term.Ehalt _ => true
+    end
+  with hcheck_fds (B : term.fundefs) : bool :=
+    match B with
+    | term.Fcons _ _ _ e B => hcheck e && hcheck_fds B
+    | term.Fnil => true
+    end.
+
 End Strip.
 
 Definition hoist (e : term.exp) : term.exp :=
@@ -113,4 +135,5 @@ Definition hoist (e : term.exp) : term.exp :=
   let H := fold_left (fun acc '(ns, _) => PS.union ns acc) hs PS.empty in
   if PS.is_empty H then e else
     let '(e', Btop) := strip H e term.Fnil in
-    term.Efun Btop e'.
+    if hcheck H (fd_names Btop) e && PS.subset (identifiers.exp_fv (term.Efun Btop e')) (identifiers.exp_fv e)
+    then term.Efun Btop e' else e.

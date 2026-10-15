@@ -33,6 +33,28 @@ Fixpoint all_fun_name (fds:fundefs) : list var :=
   end.
 
 
+(** Bundles whose functions have distinct names, which [freshen] needs to
+    give unique bindings *)
+Fixpoint nodupb (l : list var) : bool :=
+  match l with
+  | [] => true
+  | x :: l => negb (existsb (Pos.eqb x) l) && nodupb l
+  end.
+
+Fixpoint fnd (e : exp) : bool :=
+  match e with
+  | Econstr _ _ _ e | Eproj _ _ _ _ e | Eletapp _ _ _ _ e
+  | Eprim_val _ _ e | Eprim _ _ _ e => fnd e
+  | Ecase _ cl => forallb (fun p => fnd (snd p)) cl
+  | Efun B e => nodupb (all_fun_name B) && fnd_fds B && fnd e
+  | Eapp _ _ _ | Ehalt _ => true
+  end
+with fnd_fds (B : fundefs) : bool :=
+  match B with
+  | Fcons _ _ _ e B => fnd e && fnd_fds B
+  | Fnil => true
+  end.
+
 Fixpoint freshen_term (e:exp) (sigma:M.t positive) : freshM exp :=
   match e with
   | Econstr x t ys e =>

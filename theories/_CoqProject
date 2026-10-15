@@ -125,6 +125,7 @@ LambdaWeb/passes.v
 LambdaWeb/retag.v
 LambdaWeb/stats.v
 LambdaWeb/hoist.v
+LambdaWeb/hoist_correct.v
 
 # LambdaCFA: a compositional 0-CFA annotating λANF with webs
 LambdaCFA/spec.v
