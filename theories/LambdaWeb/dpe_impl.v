@@ -92,7 +92,8 @@ Definition add_mask (w : web) (m : list bool) (tbl : WM.t entry) : WM.t entry :=
 
 Fixpoint collect (e : exp) (tbl : WM.t entry) : WM.t entry :=
   match e with
-  | Econstr _ _ _ _ k | Eproj _ _ _ _ _ k | Eletapp _ _ _ _ k => collect k tbl
+  | Econstr _ _ _ _ k | Eproj _ _ _ _ _ k | Eletapp _ _ _ _ k
+  | Eprim_val _ _ k | Eprim _ _ _ k => collect k tbl
   | Ecase _ _ cl =>
       (fix go (cl : list (ctor_tag * exp)) tbl :=
          match cl with
@@ -100,7 +101,7 @@ Fixpoint collect (e : exp) (tbl : WM.t entry) : WM.t entry :=
          | (_, e) :: cl => go cl (collect e tbl)
          end) cl tbl
   | Efun B k => collect k (collect_fd B tbl)
-  | Eapp _ _ _ | Eprim_val _ _ _ | Eprim _ _ _ _ | Ehalt _ => tbl
+  | Eapp _ _ _ | Ehalt _ => tbl
   end
 with collect_fd (B : fundefs) (tbl : WM.t entry) : WM.t entry :=
   match B with
@@ -139,8 +140,8 @@ Section Transform.
     | Efun B k =>
         let k' := dpe k in if existsb (is_free k') (bnames B) then Efun (dpe_fd B) k' else k'
     | Eapp f w ys => Eapp f w (dpe_args w ys)
-    | Eprim_val x p k => Eprim_val x p k
-    | Eprim x p ys k => Eprim x p ys k
+    | Eprim_val x p k => Eprim_val x p (dpe k)
+    | Eprim x p ys k => Eprim x p ys (dpe k)
     | Ehalt x => Ehalt x
     end
   with dpe_fd (B : fundefs) : fundefs :=
@@ -158,7 +159,8 @@ Definition dpe_top (e : exp) : exp := dpe (masks e) e.
 (** Properties of the functions of an expression *)
 Fixpoint all_funs (P : web -> list var -> exp -> Prop) (e : exp) : Prop :=
   match e with
-  | Econstr _ _ _ _ k | Eproj _ _ _ _ _ k | Eletapp _ _ _ _ k => all_funs P k
+  | Econstr _ _ _ _ k | Eproj _ _ _ _ _ k | Eletapp _ _ _ _ k
+  | Eprim_val _ _ k | Eprim _ _ _ k => all_funs P k
   | Ecase _ _ cl =>
       (fix go (cl : list (ctor_tag * exp)) :=
          match cl with
@@ -166,7 +168,7 @@ Fixpoint all_funs (P : web -> list var -> exp -> Prop) (e : exp) : Prop :=
          | (_, e) :: cl => all_funs P e /\ go cl
          end) cl
   | Efun B k => all_funs_fd P B /\ all_funs P k
-  | Eapp _ _ _ | Eprim_val _ _ _ | Eprim _ _ _ _ | Ehalt _ => True
+  | Eapp _ _ _ | Ehalt _ => True
   end
 with all_funs_fd (P : web -> list var -> exp -> Prop) (B : fundefs) : Prop :=
   match B with
@@ -241,8 +243,10 @@ Section Correct.
       destruct (keeps (sel_L L) w) eqn:Hk.
       + rewrite dpe_args_keeps; [| eassumption ]. constructor; eassumption.
       + edestruct (dpe_args_sel w ys Hk) as (bs & Hw & HL & ->). econstructor; eassumption.
-    - (* Eprim_val *) intros. constructor.
-    - (* Eprim *) intros. constructor.
+    - (* Eprim_val *)
+      intros x p e IH Hok Hs. constructor. eapply trans_weaken; [ eapply IH; [ eassumption | lia ] | lia ].
+    - (* Eprim *)
+      intros x p ys e IH Hok Hs. constructor. eapply trans_weaken; [ eapply IH; [ eassumption | lia ] | lia ].
     - (* Ehalt *) intros. constructor.
     - (* Fcons *)
       intros f w xs e B IHe IHB (Hm & Hoke & HokB) Hs.
@@ -362,8 +366,8 @@ Proof.
     + eapply HB with (tbl := tbl). intros w'. eapply entry_le_trans; [| exact (HT w') ]. exact (proj1 collect_mono e (collect_fd B tbl) w').
     + exact (He (collect_fd B tbl) T HT).
   - intros. exact I.
-  - intros. exact I.
-  - intros. exact I.
+  - intros x p e He tbl T HT. exact (He tbl T HT).
+  - intros x p ys e He tbl T HT. exact (He tbl T HT).
   - intros. exact I.
   - intros f w xs e B He HB tbl T HT. split; [| split ].
     + intros Hw. pose proof (HT w) as HTw. simpl in HTw. rewrite Hw in HTw.

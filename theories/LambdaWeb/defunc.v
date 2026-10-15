@@ -606,8 +606,10 @@ Section Spec.
         FromList E \subset occurs_free_fundefs B :|: name_in_fundefs B ->
         trans e e' ->
         trans (Efun B e) (fun_recs Bk rs e')
-  | Trans_prim_val : forall x p e, trans (Eprim_val x p e) (Eprim_val x p e)
-  | Trans_prim : forall x p ys e, trans (Eprim x p ys e) (Eprim x p ys e)
+  | Trans_prim_val :
+      forall x p e e', ~ Code x -> trans e e' -> trans (Eprim_val x p e) (Eprim_val x p e')
+  | Trans_prim :
+      forall x p ys e e', ~ Code x -> trans e e' -> trans (Eprim x p ys e) (Eprim x p ys e')
   | Trans_halt : forall x, trans (Ehalt x) (Ehalt x)
   (* [trans_bundle E rs0 B Bk rs]: the functions [B] (a suffix of the bundle,
      whose records are [rs0], all with fields [E]) become the functions [Bk]
@@ -2180,8 +2182,17 @@ Section DefuncFV.
           -- eapply occurs_free_fundefs_iff in Hof. destruct Hof as [Hn' Hb'']. split; [ exact Hn' | now right ].
           -- exfalso. eapply Hnames in Hnm. destruct Hnm as [Hc | Hc]; [ contradiction |].
              eapply Hdr; constructor; eassumption.
-    - intros x p e z Hz. now left.
-    - intros x p ys e z Hz. now left.
+    - (* Eprim_val *)
+      intros x p e e' Hx Ht IH z Hz.
+      eapply (proj1 (occurs_free_Eprim_val _ _ _)) in Hz. destruct Hz as [Hz Hn].
+      destruct (IH _ Hz) as [Hz' | Hz']; [| now right ].
+      left. eapply (proj2 (occurs_free_Eprim_val _ _ _)). constructor; eauto.
+    - (* Eprim *)
+      intros x p ys e e' Hx Ht IH z Hz.
+      eapply (proj1 (occurs_free_Eprim _ _ _ _)) in Hz. destruct Hz as [z Hz | z [Hz Hn]].
+      + left. eapply (proj2 (occurs_free_Eprim _ _ _ _)). now left.
+      + destruct (IH _ Hz) as [Hz' | Hz']; [| now right ].
+        left. eapply (proj2 (occurs_free_Eprim _ _ _ _)). right. constructor; eauto.
     - intros x z Hz. now left.
     - (* TB_nil *)
       intros E rs0. split; [| split ]; simpl.

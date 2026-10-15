@@ -101,8 +101,8 @@ Section Transform.
         let k' := cp K' k in
         if existsb (is_free k') (bnames B) then Efun (cp_fd K' B) k' else k'
     | Eapp f w ys => Eapp f w (cp_args w ys)
-    | Eprim_val x p k => Eprim_val x p k
-    | Eprim x p ys k => Eprim x p ys k
+    | Eprim_val x p k => Eprim_val x p (cp (M.remove x K) k)
+    | Eprim x p ys k => Eprim x p ys (cp (M.remove x K) k)
     | Ehalt x => Ehalt x
     end
   with cp_fd (K : M.t const_info) (B : fundefs) : fundefs :=
@@ -128,7 +128,8 @@ Section Transform.
         (keeps (sel_L Lc) w || const_okb K ys (cp_cs w)) && cp_ok (M.remove x K) k
     | Efun B k => cp_ok_fd (remove_fnames B K) B && cp_ok (remove_fnames B K) k
     | Eapp f w ys => keeps (sel_L Lc) w || const_okb K ys (cp_cs w)
-    | Eprim_val _ _ _ | Eprim _ _ _ _ | Ehalt _ => true
+    | Eprim_val x _ k | Eprim x _ _ k => cp_ok (M.remove x K) k
+    | Ehalt _ => true
     end
   with cp_ok_fd (K : M.t const_info) (B : fundefs) : bool :=
     match B with
@@ -199,8 +200,12 @@ Section Transform.
       + constructor; eassumption.
       + destruct (cp_cs_sel w Hk) as [Hw HL]. simpl in Hok.
         econstructor; [ eassumption | eassumption | eapply const_okb_spec; eassumption ].
-    - (* Eprim_val *) intros. constructor.
-    - (* Eprim *) intros. constructor.
+    - (* Eprim_val *)
+      intros x p e IH K Hok Hs. simpl in *. constructor.
+      eapply trans_weaken; [ eapply IH; [ eassumption | lia ] | lia ].
+    - (* Eprim *)
+      intros x p ys e IH K Hok Hs. simpl in *. constructor.
+      eapply trans_weaken; [ eapply IH; [ eassumption | lia ] | lia ].
     - (* Ehalt *) intros. constructor.
     - (* Fcons *)
       intros f w xs e B IHe IHB K Hok Hs. simpl in *. apply andb_true_iff in Hok. destruct Hok as [Hokf HokB].
@@ -289,7 +294,8 @@ Section Analysis.
         collect_cp (M.remove x K) k t
     | Efun B k => collect_cp (remove_fnames B K) k (collect_cp_fd (remove_fnames B K) B t)
     | Eapp f w ys => if exposedb w then t else (add_call w (map (fun y => K ! y) ys) (fst t), snd t)
-    | Eprim_val _ _ _ | Eprim _ _ _ _ | Ehalt _ => t
+    | Eprim_val x _ k | Eprim x _ _ k => collect_cp (M.remove x K) k t
+    | Ehalt _ => t
     end
   with collect_cp_fd (K : M.t const_info) (B : fundefs) (t : tables) : tables :=
     match B with

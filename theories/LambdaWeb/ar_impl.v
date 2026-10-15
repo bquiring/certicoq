@@ -161,8 +161,8 @@ Section Transform.
           let ss := ar_ss w in
           let '(zss, c) := fresh_for ss c in
           (proj_args ys ss zss (Eapp f w (flat_vars ys ss zss)), c)
-    | Eprim_val x p k => (Eprim_val x p k, c)
-    | Eprim x p ys k => (Eprim x p ys k, c)
+    | Eprim_val x p k => let '(k', c) := ar (M.remove x K) k c in (Eprim_val x p k', c)
+    | Eprim x p ys k => let '(k', c) := ar (M.remove x K) k c in (Eprim x p ys k', c)
     | Ehalt x => (Ehalt x, c)
     end
   with ar_fd (K : M.t shape) (B : fundefs) (c : positive) : fundefs * positive :=
@@ -198,7 +198,8 @@ Section Transform.
     | Efun B k => ar_ok_fd (remove_names B K) B && ar_ok (remove_names B K) k
     | Eapp f w ys =>
         keeps (sel_L La) w || (Nat.eqb (length ys) (length (ar_ss w)) && shape_okb K ys (ar_ss w))
-    | Eprim_val _ _ _ | Eprim _ _ _ _ | Ehalt _ => true
+    | Eprim_val x _ k | Eprim x _ _ k => ar_ok (M.remove x K) k
+    | Ehalt _ => true
     end
   with ar_ok_fd (K : M.t shape) (B : fundefs) : bool :=
     match B with
@@ -425,8 +426,14 @@ Section Sound.
         econstructor; eauto using shape_okb_spec.
         constructor. intros z Hin. inv Hin. destruct (Hf3 _ H) as [Hz _].
         inv H0; [ inv H1; lia |]. eapply Forall_le_In in H1; [| exact Hys ]. lia.
-    - (* Eprim_val *) intros. simpl. split; [ constructor | lia ].
-    - (* Eprim *) intros. simpl. split; [ constructor | lia ].
+    - (* Eprim_val *)
+      intros x p e IH K c Hok Hv Hlt. simpl in *. destruct Hv as (Hx & He).
+      specialize (IH _ c Hok He Hlt). destruct (ar La _ e c) as [e' c'] eqn:Hk. simpl in *.
+      destruct IH as [Ht Hc]. split; [ constructor; exact Ht | exact Hc ].
+    - (* Eprim *)
+      intros x p ys e IH K c Hok Hv Hlt. simpl in *. destruct Hv as (Hx & Hys & He).
+      specialize (IH _ c Hok He Hlt). destruct (ar La _ e c) as [e' c'] eqn:Hk. simpl in *.
+      destruct IH as [Ht Hc]. split; [ constructor; exact Ht | exact Hc ].
     - (* Ehalt *) intros. simpl. split; [ constructor | lia ].
     - (* Fcons *)
       intros f w xs e B IHe IHB K c Hok Hv Hlt. simpl in *. destruct Hv as (Hfm & Hxs & He & HB).
@@ -534,7 +541,8 @@ Section Analysis.
         collect_ar (M.remove x K) k t
     | Efun B k => collect_ar (remove_names B K) k (collect_ar_fd (remove_names B K) B t)
     | Eapp f w ys => if exposedb w then t else (add_call_sh w (map (fun y => usable (K ! y)) ys) (fst t), snd t)
-    | Eprim_val _ _ _ | Eprim _ _ _ _ | Ehalt _ => t
+    | Eprim_val x _ k | Eprim x _ _ k => collect_ar (M.remove x K) k t
+    | Ehalt _ => t
     end
   with collect_ar_fd (K : M.t shape) (B : fundefs) (t : atables) : atables :=
     match B with

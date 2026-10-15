@@ -141,11 +141,13 @@ Section DPE_spec.
         trans n e e' ->
         trans n (Efun B e) (Efun B' e')
   | Trans_prim_val :
-      forall n x p e,
-        trans n (Eprim_val x p e) (Eprim_val x p e)
+      forall n x p e e',
+        trans n e e' ->
+        trans n (Eprim_val x p e) (Eprim_val x p e')
   | Trans_prim :
-      forall n x p ys e,
-        trans n (Eprim x p ys e) (Eprim x p ys e)
+      forall n x p ys e e',
+        trans n e e' ->
+        trans n (Eprim x p ys e) (Eprim x p ys e')
   | Trans_halt :
       forall n x,
         trans n (Ehalt x) (Ehalt x)

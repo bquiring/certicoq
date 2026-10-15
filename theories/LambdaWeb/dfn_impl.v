@@ -183,8 +183,8 @@ Section Transform.
         if sel_w w then Eapp f w ys
         else dispatch f w (alts_of w) (fun code wc zs => Eapp code wc (ys ++ zs))
     | Efun B k => fun_recs (dfn_fd (recs_of B) B) (recs_of B) (dfn k)
-    | Eprim_val x p k => Eprim_val x p k
-    | Eprim x p ys k => Eprim x p ys k
+    | Eprim_val x p k => Eprim_val x p (dfn k)
+    | Eprim x p ys k => Eprim x p ys (dfn k)
     | Ehalt x => Ehalt x
     end
   with dfn_fd (rs0 : list rec) (B : fundefs) : fundefs :=
@@ -277,7 +277,8 @@ Section Transform.
         forallb (fun z => negb (memb z (rec_names rs))) (rec_fields rs) &&
         benv_okb B (benv B) &&
         dfn_ok_fd (benv B) (recs_of B) B && dfn_ok k
-    | Eprim_val _ _ _ | Eprim _ _ _ _ | Ehalt _ => true
+    | Eprim_val x _ k | Eprim x _ _ k => negb (in_code x) && dfn_ok k
+    | Ehalt _ => true
     end
   with dfn_ok_fd (E : list var) (rs0 : list rec) (B : fundefs) : bool :=
     match B with
@@ -466,8 +467,12 @@ Section Transform.
         destruct Hc as [z Hc | z Hc].
         * inv Hc. rewrite Pos.eqb_refl in Hz1. discriminate.
         * eapply memb_false; eassumption.
-    - (* Eprim_val *) intros. constructor.
-    - (* Eprim *) intros. constructor.
+    - (* Eprim_val *)
+      intros x p e IH H. simpl in H. apply andb_true_iff in H. destruct H as [Hx H].
+      constructor; [ eapply in_code_false; apply negb_true_iff; eassumption | eauto ].
+    - (* Eprim *)
+      intros x p ys e IH H. simpl in H. apply andb_true_iff in H. destruct H as [Hx H].
+      constructor; [ eapply in_code_false; apply negb_true_iff; eassumption | eauto ].
     - (* Ehalt *) intros. constructor.
     - (* Fcons *)
       intros f w xs e B IHe IHB E rs0 H. simpl in H. simpl.
@@ -496,7 +501,8 @@ End Transform.
 (** The functions defined in an expression *)
 Fixpoint funs_of (e : exp) : list (var * web * list var * exp) :=
   match e with
-  | Econstr _ _ _ _ k | Eproj _ _ _ _ _ k | Eletapp _ _ _ _ k => funs_of k
+  | Econstr _ _ _ _ k | Eproj _ _ _ _ _ k | Eletapp _ _ _ _ k
+  | Eprim_val _ _ k | Eprim _ _ _ k => funs_of k
   | Ecase _ _ cl =>
       (fix go (cl : list (ctor_tag * exp)) :=
          match cl with
@@ -504,7 +510,7 @@ Fixpoint funs_of (e : exp) : list (var * web * list var * exp) :=
          | (_, e) :: cl => funs_of e ++ go cl
          end) cl
   | Efun B k => funs_of_fd B ++ funs_of k
-  | Eapp _ _ _ | Eprim_val _ _ _ | Eprim _ _ _ _ | Ehalt _ => []
+  | Eapp _ _ _ | Ehalt _ => []
   end
 with funs_of_fd (B : fundefs) : list (var * web * list var * exp) :=
   match B with
@@ -529,7 +535,8 @@ Definition max_pos (l : list positive) : positive := fold_left Pos.max l 1%posit
 (** The bundles of an expression *)
 Fixpoint bundles_of (e : exp) : list fundefs :=
   match e with
-  | Econstr _ _ _ _ k | Eproj _ _ _ _ _ k | Eletapp _ _ _ _ k => bundles_of k
+  | Econstr _ _ _ _ k | Eproj _ _ _ _ _ k | Eletapp _ _ _ _ k
+  | Eprim_val _ _ k | Eprim _ _ _ k => bundles_of k
   | Ecase _ _ cl =>
       (fix go (cl : list (ctor_tag * exp)) :=
          match cl with
@@ -537,7 +544,7 @@ Fixpoint bundles_of (e : exp) : list fundefs :=
          | (_, e) :: cl => bundles_of e ++ go cl
          end) cl
   | Efun B k => B :: bundles_of_fd B ++ bundles_of k
-  | Eapp _ _ _ | Eprim_val _ _ _ | Eprim _ _ _ _ | Ehalt _ => []
+  | Eapp _ _ _ | Ehalt _ => []
   end
 with bundles_of_fd (B : fundefs) : list fundefs :=
   match B with

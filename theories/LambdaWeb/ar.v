@@ -235,11 +235,13 @@ Section AR_spec.
         trans (remove_names B K) e e' ->
         trans K (Efun B e) (Efun B' e')
   | Trans_prim_val :
-      forall K x p e,
-        trans K (Eprim_val x p e) (Eprim_val x p e)
+      forall K x p e e',
+        trans (M.remove x K) e e' ->
+        trans K (Eprim_val x p e) (Eprim_val x p e')
   | Trans_prim :
-      forall K x p ys e,
-        trans K (Eprim x p ys e) (Eprim x p ys e)
+      forall K x p ys e e',
+        trans (M.remove x K) e e' ->
+        trans K (Eprim x p ys e) (Eprim x p ys e')
   | Trans_halt :
       forall K x,
         trans K (Ehalt x) (Ehalt x)

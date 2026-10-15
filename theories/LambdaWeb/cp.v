@@ -270,11 +270,13 @@ Section CP_spec.
         trans (remove_fnames B K) n e e' ->
         trans K n (Efun B e) (Efun B' e')
   | Trans_prim_val :
-      forall K n x p e,
-        trans K n (Eprim_val x p e) (Eprim_val x p e)
+      forall K n x p e e',
+        trans (M.remove x K) n e e' ->
+        trans K n (Eprim_val x p e) (Eprim_val x p e')
   | Trans_prim :
-      forall K n x p ys e,
-        trans K n (Eprim x p ys e) (Eprim x p ys e)
+      forall K n x p ys e e',
+        trans (M.remove x K) n e e' ->
+        trans K n (Eprim x p ys e) (Eprim x p ys e')
   | Trans_halt :
       forall K n x,
         trans K n (Ehalt x) (Ehalt x)
