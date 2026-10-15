@@ -89,7 +89,7 @@ Qed.
 
 Section Transform.
 
-  Variables (L : WM.t (list ctor_tag)) (T : M.t (var * web * nat * list arg)) (Btop : fundefs).
+  Variables (L : WM.t (list ctor_tag)) (T : ctab) (Btop : fundefs).
   Variable (tagof : M.t ctor_tag).   (* the tags of the wrappers *)
   Variable (m : var).                (* the variables above [m] are fresh *)
   Variable (thr : nat).              (* largest continuation that is duplicated *)
@@ -113,20 +113,20 @@ Section Transform.
   Lemma fresh_from_length b n : length (fresh_from b n) = n.
   Proof. unfold fresh_from. rewrite length_map, length_seq. reflexivity. Qed.
 
-  Definition mk_alt (c : ctor_tag) : alt :=
-    match T ! c with
+  Definition mk_alt (w : web) (c : ctor_tag) : alt :=
+    match T w c with
     | Some (code, wc, n, args) => (c, code, wc, fresh_from 0 n, args, fresh_from n (length args))
     | None => (c, 1%positive, Internal 1%positive, [], [], [])
     end.
 
   Definition alts_of (w : web) : list alt :=
-    match WM.get w L with Some lams => map mk_alt lams | None => [] end.
+    match WM.get w L with Some lams => map (mk_alt w) lams | None => [] end.
 
   Lemma alts_of_tags w lams : WM.get w L = Some lams -> map alt_tag (alts_of w) = lams.
   Proof.
     unfold alts_of. intros H. rewrite H. rewrite map_map.
     erewrite map_ext; [ apply map_id |]. intros c. unfold mk_alt.
-    destruct (T ! c) as [[[[? ?] ?] ?] |]; reflexivity.
+    destruct (T w c) as [[[[? ?] ?] ?] |]; reflexivity.
   Qed.
 
   Definition sel_w (w : web) : bool := keeps (sel_L L) w.
@@ -202,7 +202,7 @@ Section Transform.
   Definition alts_okb (w : web) (avoid : var -> bool) : bool :=
     match WM.get w L with
     | Some lams =>
-        forallb (fun c => match T ! c with
+        forallb (fun c => match T w c with
                           | Some (code, wc, n, args) =>
                               let vs := fresh_from 0 n ++ fresh_from n (length args) in
                               nodupb vs && forallb (fun z => negb (avoid z || in_code z)) vs &&
@@ -234,7 +234,7 @@ Section Transform.
     match wrapper_fields xs e, tagof ! f, WM.get w L with
     | Some (code, wc, zs), Some c, Some lams =>
         memb c lams &&
-        match T ! c with
+        match T w c with
         | Some (code', wc', n, args) =>
             Pos.eqb code code' && web_eqb wc wc' && Nat.eqb n (length E) && args_okb E rs0 args zs
         | None => false
@@ -302,7 +302,7 @@ Section Transform.
     unfold alts_of. rewrite HL. eapply Forall_forall. intros a Ha.
     eapply in_map_iff in Ha. destruct Ha as (c & <- & Hc).
     eapply forallb_forall in H; [| exact Hc ]. unfold mk_alt.
-    destruct (T ! c) as [[[[code wc] n] args] |] eqn:HT; [| discriminate ].
+    destruct (T w c) as [[[[code wc] n] args] |] eqn:HT; [| discriminate ].
     apply andb_true_iff in H. destruct H as [H Hint]. apply andb_true_iff in H. destruct H as [Hnd Hdis].
     split; [ rewrite fresh_from_length; exact HT |].
     split; [ eapply nodupb_spec; eassumption |].
@@ -357,7 +357,7 @@ Section Transform.
     wrapper_okb E rs0 f w xs e = true ->
     exists code wc zs c lams args,
       wrapper_fields xs e = Some (code, wc, zs) /\ tagof ! f = Some c /\
-      WM.get w L = Some lams /\ List.In c lams /\ T ! c = Some (code, wc, length E, args) /\
+      WM.get w L = Some lams /\ List.In c lams /\ T w c = Some (code, wc, length E, args) /\
       Forall2 (arg_ok E rs0) args zs /\ Code Btop code /\ exposedb wc = false /\ WM.get wc L = None /\
       NoDup xs /\ Disjoint _ (FromList xs) (FromList zs) /\ ~ List.In code xs.
   Proof.
@@ -372,7 +372,7 @@ Section Transform.
     apply andb_true_iff in H. destruct H as [H Hwc].
     apply andb_true_iff in H. destruct H as [H Hcode].
     apply andb_true_iff in H. destruct H as [Hmem Hm].
-    destruct (T ! c) as [[[[code' wc'] n] args] |] eqn:HT; [| discriminate ].
+    destruct (T w c) as [[[[code' wc'] n] args] |] eqn:HT; [| discriminate ].
     apply andb_true_iff in Hm. destruct Hm as [Hm Hargs].
     apply andb_true_iff in Hm. destruct Hm as [Hm Hn].
     apply andb_true_iff in Hm. destruct Hm as [Hc1 Hw1].
@@ -598,17 +598,23 @@ with esc_vars_fd (B : fundefs) : PS.t :=
 
 Record dfn_result : Type :=
   { r_L : WM.t (list ctor_tag);
-    r_T : M.t (var * web * nat * list arg);
+    r_T : WM.t (M.t (var * web * nat * list arg));
     r_tagof : M.t ctor_tag;
     r_cenv : term.ctor_env }.
 
 (** * Constructor tags
 
-    The constructors of a defunctionalized web live in a reserved range of
-    tags, at or above [res_base].  The tag of the [o]-th lambda of internal
-    web [p] with [n] fields is [2^n (2 (2^o (2 (p + res_base) + 1)) + 1)];
-    its inductive type is [p + res_base].  Its information is computed from
-    the tag alone. *)
+    The transformation only needs the tags of a web to be distinct.  The
+    analysis picks them so that a constructor's information is a function
+    of its tag, so units compiled separately agree on every tag they share,
+    and so that they meet the backend's invariants on constructors.
+
+    The constructors of a web whose closures have [s = [n_0; ...; n_k]]
+    fields form one inductive type, the type of shape [s]; the [o]-th has
+    ordinal [o] and arity [n_o].  Webs of the same shape share their
+    constructors.  The tags are in a reserved range, above [res_base]: the
+    tag of the [o]-th constructor of shape [s] is [res_base] plus a code of
+    the list [o :: s]. *)
 Definition res_base : positive := 1048576.
 
 Fixpoint shiftz (n : nat) (t : positive) : positive :=
@@ -617,37 +623,70 @@ Fixpoint shiftz (n : nat) (t : positive) : positive :=
   | S n => xO (shiftz n t)
   end.
 
-Definition dfn_tag (p : positive) (o n : nat) : ctor_tag :=
-  shiftz n (xI (shiftz o (xI (p + res_base)))).
+(** A list of numbers as a positive: [n] zeros, a one, then the rest *)
+Fixpoint enc (l : list nat) : positive :=
+  match l with
+  | [] => xH
+  | n :: l => shiftz n (xI (enc l))
+  end.
 
-Fixpoint tz (t : positive) : nat * positive :=
+Fixpoint dec_from (t : positive) (n : nat) : list nat :=
   match t with
-  | xO t => let '(n, r) := tz t in (S n, r)
-  | _ => (O, t)
+  | xH => []
+  | xO t => dec_from t (S n)
+  | xI t => n :: dec_from t O
   end.
 
-(** The inductive tag, ordinal and arity of a reserved tag *)
-Definition dfn_dec (t : ctor_tag) : positive * nat * nat :=
-  let '(n, r) := tz t in
-  match r with
-  | xI r1 => let '(o, r2) := tz r1 in
-             match r2 with
-             | xI q => (q, o, n)
-             | _ => (1%positive, O, n)
-             end
-  | _ => (1%positive, O, n)
-  end.
+Lemma dec_from_shiftz n t k : dec_from (shiftz n t) k = dec_from t (n + k).
+Proof.
+  revert k. induction n; intros k; simpl; [ reflexivity |].
+  rewrite IHn. f_equal. lia.
+Qed.
 
-Definition dfn_info (t : ctor_tag) : term.ctor_ty_info :=
-  let '(it, o, n) := dfn_dec t in
+Lemma dec_enc l : dec_from (enc l) O = l.
+Proof.
+  induction l as [| n l IH]; simpl; [ reflexivity |].
+  rewrite dec_from_shiftz. simpl. rewrite IH. f_equal. lia.
+Qed.
+
+Lemma enc_inj l1 l2 : enc l1 = enc l2 -> l1 = l2.
+Proof. intros H. rewrite <- (dec_enc l1), <- (dec_enc l2), H. reflexivity. Qed.
+
+Definition dfn_ind (s : list nat) : positive := (enc s + res_base)%positive.
+
+Definition dfn_tag (s : list nat) (o : nat) : ctor_tag := (enc (o :: s) + res_base)%positive.
+
+Definition shape_info (s : list nat) (o : nat) : term.ctor_ty_info :=
   {| term.ctor_name := BasicAst.nAnon; term.ctor_ind_name := BasicAst.nAnon;
-     term.ctor_ind_tag := it; term.ctor_arity := N.of_nat n; term.ctor_ordinal := N.of_nat o |}.
+     term.ctor_ind_tag := dfn_ind s; term.ctor_arity := N.of_nat (nth o s O);
+     term.ctor_ordinal := N.of_nat o |}.
 
-Lemma tz_shiftz n t : tz (shiftz n (xI t)) = (n, xI t).
-Proof. induction n; simpl; [ reflexivity | rewrite IHn; reflexivity ]. Qed.
+(** The information of a reserved tag *)
+Definition dfn_info (t : ctor_tag) : term.ctor_ty_info :=
+  match dec_from (t - res_base) O with
+  | o :: s => shape_info s o
+  | [] => shape_info [] O
+  end.
 
-Lemma dfn_dec_tag p o n : dfn_dec (dfn_tag p o n) = ((p + res_base)%positive, o, n).
-Proof. unfold dfn_dec, dfn_tag. rewrite !tz_shiftz. reflexivity. Qed.
+Lemma dfn_info_tag s o : dfn_info (dfn_tag s o) = shape_info s o.
+Proof. unfold dfn_info, dfn_tag. rewrite Pos.add_sub, dec_enc. reflexivity. Qed.
+
+Lemma dfn_tag_res s o : (res_base < dfn_tag s o)%positive.
+Proof. unfold dfn_tag. lia. Qed.
+
+(** Within an inductive type, the ordinal determines the tag *)
+Lemma dfn_ordinal_unique s1 o1 s2 o2 :
+  term.ctor_ind_tag (dfn_info (dfn_tag s1 o1)) = term.ctor_ind_tag (dfn_info (dfn_tag s2 o2)) ->
+  term.ctor_ordinal (dfn_info (dfn_tag s1 o1)) = term.ctor_ordinal (dfn_info (dfn_tag s2 o2)) ->
+  dfn_tag s1 o1 = dfn_tag s2 o2.
+Proof.
+  rewrite !dfn_info_tag. simpl. unfold dfn_ind. intros Hi Ho.
+  assert (Hs : s1 = s2) by (eapply enc_inj; lia). apply (f_equal N.to_nat) in Ho. rewrite !Nnat.Nat2N.id in Ho. subst. reflexivity.
+Qed.
+
+(** The table of a defunctionalization, by web *)
+Definition tlook (Tm : WM.t (M.t (var * web * nat * list arg))) : ctab :=
+  fun w c => match WM.get w Tm with Some Tw => Tw ! c | None => None end.
 
 Section Analysis.
 
@@ -710,7 +749,7 @@ Section Analysis.
 
   (** The table of code functions: once the tags are known, the environment
       of every bundle and the extra arguments of its wrappers *)
-  Definition table (L : WM.t (list ctor_tag)) (tagof : M.t ctor_tag) : M.t (var * web * nat * list arg) :=
+  Definition table (L : WM.t (list ctor_tag)) (tagof : M.t ctor_tag) : WM.t (M.t (var * web * nat * list arg)) :=
     fold_left (fun T B =>
                  let E := benv L tagof B in
                  let rs := recs_with L tagof E B in
@@ -718,25 +757,22 @@ Section Analysis.
                               if sel_w L w then T
                               else match wrapper_fields xs e, tagof ! f with
                                    | Some (code, wc, zs), Some c =>
-                                       M.set c (code, wc, length E, map (mk_arg E rs) zs) T
+                                       let Tw := match WM.get w T with Some Tw => Tw | None => M.empty _ end in
+                                       WM.set w (M.set c (code, wc, length E, map (mk_arg E rs) zs) Tw) T
                                    | _, _ => T
-                                   end) (fd_list B) T) inner_bundles (M.empty _).
+                                   end) (fd_list B) T) inner_bundles (WM.empty _).
 
   (** ** The constructors
 
-      The tags above are provisional.  The final tag of the [o]-th lambda of
-      web [p], whose closure has [n] fields, is [dfn_tag p o n]; the
-      constructor's information is a function of its tag ([dfn_info]), so
-      separately compiled units that pick the same tag agree on it. *)
-  Definition web_idx (w : web) : positive := match w with Internal p => p | Exposed _ => 1%positive end.
-
+      The tags above are provisional, and distinct.  Once the table gives
+      the number of fields of every closure, and so the shape of every web,
+      the [o]-th lambda of a web of shape [s] gets the tag [dfn_tag s o]. *)
   Definition final : M.t ctor_tag * WM.t (list ctor_tag) :=
     let '(tagof0, L0, _) := assign_sel in
-    let T0 := table L0 tagof0 in
+    let T0 := tlook (table L0 tagof0) in
     let ren := fold_left (fun ren '(w, lams) =>
-                            fold_left (fun ren '(o, c) =>
-                                         let n := match T0 ! c with Some (_, _, n, _) => n | None => 0 end in
-                                         M.set c (dfn_tag (web_idx w) o n) ren)
+                            let s := map (fun c => match T0 w c with Some (_, _, n, _) => n | None => O end) lams in
+                            fold_left (fun ren '(o, c) => M.set c (dfn_tag s o) ren)
                                       (combine (seq 0 (length lams)) lams) ren)
                          (WM_elements L0) (M.empty _) in
     let rn c := match ren ! c with Some c' => c' | None => c end in
@@ -791,14 +827,19 @@ Proof.
   destruct (cenv ! c) as [i |]; [| discriminate ]. apply Pos.eqb_eq in H. eauto.
 Qed.
 
-Definition ht_check (Btop : fundefs) (T : M.t (var * web * nat * list arg)) : bool :=
-  forallb (fun p => match snd p with (code, _, _, _) => in_code Btop code end) (M.elements T).
+Definition ht_check (Btop : fundefs) (Tm : WM.t (M.t (var * web * nat * list arg))) : bool :=
+  forallb (fun '(_, Tw) => forallb (fun p => match snd p with (code, _, _, _) => in_code Btop code end)
+                                   (M.elements Tw)) (WM_elements Tm).
 
-Lemma ht_check_spec Btop T :
-  ht_check Btop T = true -> forall c code wc n args, T ! c = Some (code, wc, n, args) -> Code Btop code.
+Lemma ht_check_spec Btop Tm :
+  ht_check Btop Tm = true ->
+  forall w c code wc n args, tlook Tm w c = Some (code, wc, n, args) -> Code Btop code.
 Proof.
-  intros H c code wc n args HT. eapply M.elements_correct in HT.
-  eapply forallb_forall in H; [| exact HT ]. simpl in H. eapply in_code_true; eassumption.
+  intros H w c code wc n args HT. unfold tlook in HT.
+  destruct (WM.get w Tm) as [Tw |] eqn:Hw; [| discriminate ].
+  eapply WM_elements_correct in Hw. eapply forallb_forall in H; [| exact Hw ]. simpl in H.
+  eapply M.elements_correct in HT. eapply forallb_forall in H; [| exact HT ]. simpl in H.
+  eapply in_code_true; eassumption.
 Qed.
 
 (** The new constructors are new *)
@@ -825,11 +866,12 @@ Qed.
 Definition res_check (l : list (ctor_tag * term.ctor_ty_info)) : bool :=
   forallb (fun '(c, _) => Pos.leb res_base c) l.
 
-Definition ar_check (T : M.t (var * web * nat * list arg)) (l : list (ctor_tag * term.ctor_ty_info)) : bool :=
-  forallb (fun '(c, i) => match T ! c with
-                          | Some (_, _, n, _) => N.eqb (term.ctor_arity i) (N.of_nat n)
-                          | None => false
-                          end) l.
+Definition ar_check (T : ctab) (L : WM.t (list ctor_tag)) : bool :=
+  forallb (fun '(w, lams) =>
+             forallb (fun c => match T w c with
+                               | Some (_, _, n, _) => N.eqb (term.ctor_arity (dfn_info c)) (N.of_nat n)
+                               | None => false
+                               end) lams) (WM_elements L).
 
 Lemma fold_set_inv (l : list (ctor_tag * term.ctor_ty_info)) acc c i :
   (fold_left (fun acc '(c, info) => M.set c info acc) l acc) ! c = Some i ->
@@ -895,14 +937,14 @@ Definition dfn_top (cenv : term.ctor_env) (e : exp) : term.ctor_env * exp :=
   | Efun Btop e0 =>
       let r := analyze_dfn cenv Btop e0 in
       let L := r_L r in
-      let T := r_T r in
+      let T := tlook (r_T r) in
       let tagof := r_tagof r in
       let m := identifiers.max_var (erase e) 1%positive in
       let jw := Pos.succ (max_iweb e) in
       if forallb (sel_w L) (fd_webs Btop) && nodupb (bnames Btop) &&
          dfn_ok_fd L T Btop tagof m dfn_thr [] [] Btop && dfn_ok L T Btop tagof m dfn_thr e0 &&
-         hl_check (r_cenv r) L && ht_check Btop T && ext_check cenv (new_ctors cenv Btop e0) &&
-         res_check (new_ctors cenv Btop e0) && ar_check T (new_ctors cenv Btop e0)
+         hl_check (r_cenv r) L && ht_check Btop (r_T r) && ext_check cenv (new_ctors cenv Btop e0) &&
+         res_check (new_ctors cenv Btop e0) && ar_check T L
       then (r_cenv r, Efun (dfn_fd L T tagof m dfn_thr jw [] Btop) (dfn L T tagof m dfn_thr jw e0))
       else (cenv, e)
   | _ => (cenv, e)
@@ -966,9 +1008,9 @@ Proof.
   set (jw := Pos.succ (max_iweb (Efun f e))) in *.
   assert (Hext : forall c i, cenv ! c = Some i -> (r_cenv r) ! c = Some i).
   { intros c i Hci. unfold r. rewrite r_cenv_eq. eapply ext_check_spec; eauto. }
-  assert (Htop : trans_top (r_L r) (r_T r) f (Efun f e)
-                           (Efun (dfn_fd (r_L r) (r_T r) (r_tagof r) m dfn_thr jw [] f)
-                                 (dfn (r_L r) (r_T r) (r_tagof r) m dfn_thr jw e))).
+  assert (Htop : trans_top (r_L r) (tlook (r_T r)) f (Efun f e)
+                           (Efun (dfn_fd (r_L r) (tlook (r_T r)) (r_tagof r) m dfn_thr jw [] f)
+                                 (dfn (r_L r) (tlook (r_T r)) (r_tagof r) m dfn_thr jw e))).
   { do 3 eexists. split; [ reflexivity | split; [ reflexivity |] ].
     split; [| split ].
     - match goal with
@@ -978,7 +1020,7 @@ Proof.
       end.
     - rewrite <- bnames_fnames. eapply nodupb_spec. eassumption.
     - eapply (proj1 (dfn_ok_trans _ _ _ _ _ _ jw)). eassumption. }
-  pose proof (dfn_refines (r_cenv r) (fuel := nat) (trace := nat * nat) (r_L r) (r_T r) f
+  pose proof (dfn_refines (r_cenv r) (fuel := nat) (trace := nat * nat) (r_L r) (tlook (r_T r)) f
                           (hl_check_spec _ _ ltac:(eassumption)) (ht_check_spec _ _ ltac:(eassumption))
                           _ _ Hc Htop) as [Hterm Hdiv].
   split.

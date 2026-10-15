@@ -71,7 +71,7 @@ Section Steps.
     (forall w lams, WM.get w L = Some lams ->
                     exists it, Forall (fun c => exists info, M.get c cenv = Some info /\
                                                              term.ctor_ind_tag info = it) lams) ->
-    (forall c code wc n args, T ! c = Some (code, wc, n, args) -> Code Btop code) ->
+    (forall w c code wc n args, T w c = Some (code, wc, n, args) -> Code Btop code) ->
     trans_top L T Btop e et -> web_n cenv 1 e et.
   Proof.
     intros HL HT Htop. econstructor; [ | | eapply P_ge_web_post ].
@@ -113,7 +113,7 @@ Proof.
   set (jw := Pos.succ (max_iweb (Efun f e))) in *.
   split.
   { intros c i Hci. unfold r. rewrite r_cenv_eq. eapply ext_check_spec; eauto. }
-  eapply (dfn_trans_web_n (r_cenv r) (r_L r) (r_T r) f);
+  eapply (dfn_trans_web_n (r_cenv r) (r_L r) (tlook (r_T r)) f);
     [ eapply hl_check_spec; eassumption | eapply ht_check_spec; eassumption |].
   do 3 eexists. split; [ reflexivity | split; [ reflexivity |] ].
   split; [| split ].
@@ -147,7 +147,7 @@ Proof.
   split.
   { intros c i Hci. unfold r. rewrite r_cenv_eq. eapply ext_check_spec; eauto. }
   intros cenv'' Hext.
-  eapply (dfn_trans_web_n cenv'' (r_L r) (r_T r) f).
+  eapply (dfn_trans_web_n cenv'' (r_L r) (tlook (r_T r)) f).
   - intros w lams HL.
     match goal with Hh : hl_check _ _ = true |- _ => destruct (hl_check_spec _ _ Hh w lams HL) as [it Hit] end.
     exists it. eapply Forall_impl; [| exact Hit ]. intros c [info [Hc Hi]].

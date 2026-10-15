@@ -11,11 +11,12 @@
      let rec f xs = code_f (xs ++ zs)   (* web w, selected *)
 
    A selected web [w] has a lambda set [WM.get w L] of constructor tags; the
-   closure of a wrapper becomes a record [C_f(E)] (the tag [C_f] is mapped
-   to [code_f] by [T]), and a call through [w] becomes a case analysis on the
-   record over the lambda set, whose branches project the fields and call the
-   code function by name.  All the wrappers of a bundle share the fields [E]
-   (the environment of the bundle, without its wrappers): a wrapper that
+   closure of a wrapper becomes a record [C_f(E)] ([T w] maps the tag [C_f]
+   to [code_f]: tags need only be distinct within a web), and a call
+   through [w] becomes a case analysis on the record over the lambda set,
+   whose branches project the fields and call the code function by name.
+   All the wrappers of a bundle share the fields [E] (the environment of
+   the bundle, without its wrappers): a wrapper that
    captures a sibling (or itself) gets the sibling's record rebuilt from the
    same fields at the call, so mutually recursive closures need no cyclic
    records.  In the simple case of a single wrapper with no recursion:
@@ -528,11 +529,17 @@ End Defunc.
 
 (** * Specification *)
 
+(** The table of a defunctionalization: the record of tag [c] in web [w]
+    stands for the closure of a wrapper that calls the code function
+    [code] (of web [wc]) with [n] fields, passing the extra arguments
+    [args].  Tags need only be distinct within a web: [T w] is a function
+    of the tag. *)
+Definition ctab : Type := web -> ctor_tag -> option (var * web * nat * list arg).
+
 Section Spec.
 
   Variable (L : WM.t (list ctor_tag)).     (* lambda sets of the selected webs *)
-  (* tag -> code function, its web, number of fields, extra arguments *)
-  Variable (T : M.t (var * web * nat * list arg)).
+  Variable (T : ctab).
   Variable (Btop : fundefs).              (* the lifted code functions *)
 
   Definition Code : Ensemble var := name_in_fundefs Btop.
@@ -540,7 +547,7 @@ Section Spec.
   Definition alts_ok (w : web) (alts : list alt) (avoid : Ensemble var) : Prop :=
     WM.get w L = Some (map alt_tag alts) /\
     Forall (fun a => let '(c, code, wc, zs, args, ss) := a in
-                     T ! c = Some (code, wc, length zs, args) /\ NoDup (zs ++ ss) /\
+                     T w c = Some (code, wc, length zs, args) /\ NoDup (zs ++ ss) /\
                      length ss = length args /\ Forall arg_internal args /\
                      Disjoint _ (FromList (zs ++ ss)) (avoid :|: Code)) alts.
 
@@ -625,7 +632,7 @@ Section Spec.
   | TB_sel :
       forall E rs0 f w xs zs B Bk rs lams c code wc args,
         exposedb w = false -> WM.get w L = Some lams -> List.In c lams ->
-        T ! c = Some (code, wc, length E, args) -> Code code ->
+        T w c = Some (code, wc, length E, args) -> Code code ->
         exposedb wc = false -> WM.get wc L = None ->
         NoDup xs -> Disjoint _ (FromList xs) (FromList zs) -> ~ List.In code xs ->
         Forall2 (arg_ok E rs0) args zs ->
@@ -648,7 +655,7 @@ End Spec.
 
 Section SpecFacts.
 
-  Variables (L : WM.t (list ctor_tag)) (T : M.t (var * web * nat * list arg)) (Btop : fundefs).
+  Variables (L : WM.t (list ctor_tag)) (T : ctab) (Btop : fundefs).
 
   Local Notation Code := (Code Btop).
   Local Notation trans := (trans L T Btop).
@@ -783,7 +790,7 @@ Section SpecFacts.
     exists xs ys lams code wc args,
       find_def f B = Some (w, xs, Eapp code wc (xs ++ ys)) /\
       exposedb w = false /\ WM.get w L = Some lams /\ List.In c lams /\
-      T ! c = Some (code, wc, length E, args) /\ Code code /\
+      T w c = Some (code, wc, length E, args) /\ Code code /\
       exposedb wc = false /\ WM.get wc L = None /\
       NoDup xs /\ Disjoint _ (FromList xs) (FromList ys) /\ ~ List.In code xs /\
       Forall2 (arg_ok E rs0) args ys.
@@ -842,7 +849,7 @@ Section DefuncRel.
   Local Notation PostGT := (@exposed.PostGT fuel trace).
   Local Notation VTransT := (@exposed.VTransT fuel trace).
 
-  Variables (L : WM.t (list ctor_tag)) (T : M.t (var * web * nat * list arg)) (Btop Btop' : fundefs).
+  Variables (L : WM.t (list ctor_tag)) (T : ctab) (Btop Btop' : fundefs).
 
   Local Notation Code := (Code Btop).
   Local Notation trans := (trans L T Btop).
@@ -866,7 +873,7 @@ Section DefuncRel.
       | Vfun rho1 B1 f1, Vconstr w c vs2 =>
           exists xs ys lams code wc args vcode vys avs,
             find_def f1 B1 = Some (w, xs, Eapp code wc (xs ++ ys)) /\
-            WM.get w L = Some lams /\ List.In c lams /\ T ! c = Some (code, wc, length vs2, args) /\
+            WM.get w L = Some lams /\ List.In c lams /\ T w c = Some (code, wc, length vs2, args) /\
             exposedb wc = false /\ WM.get wc L = None /\
             NoDup xs /\ Disjoint _ (FromList xs) (FromList ys) /\ ~ List.In code xs /\
             M.get code (def_funs B1 B1 rho1 rho1) = Some vcode /\
@@ -916,7 +923,7 @@ Section DefuncRel.
   Qed.
 
   (** The code functions of the tags are defined at the top *)
-  Hypothesis HT : forall c code wc n args, T ! c = Some (code, wc, n, args) -> Code code.
+  Hypothesis HT : forall w c code wc n args, T w c = Some (code, wc, n, args) -> Code code.
 
   Lemma sel_L_None w : WM.get w L = None -> sel w = false.
   Proof. unfold sel_L. intros H; rewrite H; reflexivity. Qed.
@@ -955,7 +962,7 @@ Section DefuncRel.
       find_def h B = Some (w, xs, e) -> exposedb w = false -> sel w = true ->
       exists ys lams code wc args vcode vys avs,
         e = Eapp code wc (xs ++ ys) /\
-        WM.get w L = Some lams /\ List.In c lams /\ T ! c = Some (code, wc, length vs2, args) /\
+        WM.get w L = Some lams /\ List.In c lams /\ T w c = Some (code, wc, length vs2, args) /\
         exposedb wc = false /\ WM.get wc L = None /\
         NoDup xs /\ Disjoint _ (FromList xs) (FromList ys) /\ ~ List.In code xs /\
         M.get code (def_funs B B rhoc rhoc) = Some vcode /\
@@ -975,7 +982,7 @@ Section DefuncRel.
       exposedb w = false -> sel w = true ->
       (forall rhoc B h, M.get f rho1 = Some (Vfun rhoc B h) -> fun_web B h = Some w ->
                         V k (Vfun rhoc B h) (Vconstr w c vs2)) ->
-      T ! c = Some (code, wc, length vs2, args) -> arg_vals vs2 args = Some avs ->
+      T w c = Some (code, wc, length vs2, args) -> arg_vals vs2 args = Some avs ->
       M.get code rhop = Some (Vfun rtop Btop' code) ->
       get_list zs' rhop = Some avs ->
       Forall2 (var_rel k rho1 rhop) ys ys ->
@@ -1054,7 +1061,7 @@ Section DefuncRel.
       exposedb w = false -> sel w = true ->
       (forall rhoc B h, M.get f rho1 = Some (Vfun rhoc B h) -> fun_web B h = Some w ->
                         V k (Vfun rhoc B h) (Vconstr w c vs2)) ->
-      T ! c = Some (code, wc, length vs2, args) -> arg_vals vs2 args = Some avs ->
+      T w c = Some (code, wc, length vs2, args) -> arg_vals vs2 args = Some avs ->
       M.get code rhop = Some (Vfun rtop Btop' code) ->
       get_list zs' rhop = Some avs ->
       Forall2 (var_rel k rho1 rhop) ys ys ->
@@ -1339,7 +1346,7 @@ Section DefuncRel.
           M.get f rho2 = Some (Vconstr w c vs2) ->
           (forall rhoc B h, M.get f rho1 = Some (Vfun rhoc B h) -> fun_web B h = Some w ->
                             V k (Vfun rhoc B h) (Vconstr w c vs2)) ->
-          T ! c = Some (code, wc, length vs2, args) ->
+          T w c = Some (code, wc, length vs2, args) ->
           arg_vals vs2 args = Some avs ->
           Disjoint _ (FromList (zs ++ ss)) (avoid :|: Code) ->
           (forall x, ~ List.In x (zs ++ ss) -> M.get x rhop = M.get x rho2) ->
@@ -1911,13 +1918,13 @@ Section DefuncTop.
 
   Context {fuel : Type} {Hf : @fuel_resource fuel} {trace : Type} {Ht : @trace_resource trace}.
 
-  Variables (L : WM.t (list ctor_tag)) (T : M.t (var * web * nat * list arg)) (Btop : fundefs).
+  Variables (L : WM.t (list ctor_tag)) (T : ctab) (Btop : fundefs).
 
   Hypothesis HL :
     forall w lams, WM.get w L = Some lams ->
                    exists it, Forall (fun c => exists info, M.get c cenv = Some info /\
                                                             term.ctor_ind_tag info = it) lams.
-  Hypothesis HT : forall c code wc n args, T ! c = Some (code, wc, n, args) -> Code Btop code.
+  Hypothesis HT : forall w c code wc n args, T w c = Some (code, wc, n, args) -> Code Btop code.
 
   (** Defunctionalization is in the λweb relation. *)
   Theorem dfn_correct_top e et :
@@ -2072,10 +2079,10 @@ Qed.
 
 Section DefuncFV.
 
-  Variables (L : WM.t (list ctor_tag)) (T : M.t (var * web * nat * list arg)) (Btop : fundefs).
+  Variables (L : WM.t (list ctor_tag)) (T : ctab) (Btop : fundefs).
 
   (** The code functions of the lambda sets are among [Btop] *)
-  Hypothesis (HT : forall c code wc n args, T ! c = Some (code, wc, n, args) -> Code Btop code).
+  Hypothesis (HT : forall w c code wc n args, T w c = Some (code, wc, n, args) -> Code Btop code).
 
   Local Notation Code := (Code Btop).
 
