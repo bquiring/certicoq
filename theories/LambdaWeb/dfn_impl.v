@@ -617,6 +617,12 @@ Record dfn_result : Type :=
     the list [o :: s]. *)
 Definition res_base : positive := 1048576.
 
+(** The most constructors a web may have.  The runtime stores the ordinal
+    of a boxed constructor in the low 8 bits of its header, and the garbage
+    collector does not scan the fields of objects whose ordinal is
+    [No_scan_tag = 251] or more. *)
+Definition max_ctors : nat := 251.
+
 Fixpoint shiftz (n : nat) (t : positive) : positive :=
   match n with
   | O => t
@@ -736,7 +742,7 @@ Section Analysis.
     fold_left (fun acc e => PS.union (esc_vars e) acc) (fd_bodies Btop) (esc_vars e0).
 
   Definition worth (tagof : M.t ctor_tag) (lams : list ctor_tag) : bool :=
-    Nat.leb 2 (length lams) &&
+    Nat.leb 2 (length lams) && Nat.leb (length lams) max_ctors &&
     existsb (fun '(f, c) => PS.mem f escaping && existsb (Pos.eqb c) lams) (M.elements tagof).
 
   Definition assign_sel : M.t ctor_tag * WM.t (list ctor_tag) * positive :=
@@ -860,9 +866,10 @@ Proof.
   eapply Hgen. eassumption.
 Qed.
 
-(** The new constructors are in the reserved range; their arities are the
-    numbers of fields of the closures (the backend's representation; the
-    correctness proof does not need it) *)
+(** The new constructors are in the reserved range.  Their arities are the
+    numbers of fields of the closures, and their ordinals fit in a header
+    (the backend's representation; the correctness proof does not need
+    it). *)
 Definition res_check (l : list (ctor_tag * term.ctor_ty_info)) : bool :=
   forallb (fun '(c, _) => Pos.leb res_base c) l.
 
@@ -872,6 +879,9 @@ Definition ar_check (T : ctab) (L : WM.t (list ctor_tag)) : bool :=
                                | Some (_, _, n, _) => N.eqb (term.ctor_arity (dfn_info c)) (N.of_nat n)
                                | None => false
                                end) lams) (WM_elements L).
+
+Definition ord_check (L : WM.t (list ctor_tag)) : bool :=
+  forallb (fun '(_, lams) => Nat.leb (length lams) max_ctors) (WM_elements L).
 
 Lemma fold_set_inv (l : list (ctor_tag * term.ctor_ty_info)) acc c i :
   (fold_left (fun acc '(c, info) => M.set c info acc) l acc) ! c = Some i ->
@@ -944,7 +954,7 @@ Definition dfn_top (cenv : term.ctor_env) (e : exp) : term.ctor_env * exp :=
       if forallb (sel_w L) (fd_webs Btop) && nodupb (bnames Btop) &&
          dfn_ok_fd L T Btop tagof m dfn_thr [] [] Btop && dfn_ok L T Btop tagof m dfn_thr e0 &&
          hl_check (r_cenv r) L && ht_check Btop (r_T r) && ext_check cenv (new_ctors cenv Btop e0) &&
-         res_check (new_ctors cenv Btop e0) && ar_check T L
+         res_check (new_ctors cenv Btop e0) && ar_check T L && ord_check L
       then (r_cenv r, Efun (dfn_fd L T tagof m dfn_thr jw [] Btop) (dfn L T tagof m dfn_thr jw e0))
       else (cenv, e)
   | _ => (cenv, e)
