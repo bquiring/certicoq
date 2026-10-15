@@ -240,7 +240,9 @@ Section IDENT.
       let fallback := match LambdaCFA.spec.s_ex sl with LambdaCFA.spec.AAll => true | _ => false end in
       let e0 := LambdaCFA.impl.anno w_con sl e in
       let dmsg := dfn_stats cenv e0 in
-      let '(cenv', ed) := LambdaWeb.dfn_impl.dfn_top cenv e0 in
+      let '(cenv', ed0) := LambdaWeb.dfn_impl.dfn_top cenv e0 in
+      (* remove the functions left dead, before arity raising *)
+      let ed := LambdaWeb.dpe_impl.dpe_top ed0 in
       let ndfn := (N.of_nat (length (M.elements cenv')) - N.of_nat (length (M.elements cenv)))%N in
       let La := LambdaWeb.ar_impl.ar_choose ed in
       let nflat := N.of_nat (length (filter (fun o : option LambdaWeb.ar.shape => match o with Some _ => true | None => false end)
@@ -248,16 +250,43 @@ Section IDENT.
       let ea := LambdaWeb.ar_impl.ar_top ed in
       let e1 := LambdaWeb.dpe_impl.dpe_top ea in
       let ew := LambdaWeb.cp_impl.cp_top e1 in
+      let sd := LambdaWeb.stats.stats_of ed in
+      let sa := LambdaWeb.stats.stats_of ea in
+      let s1 := LambdaWeb.stats.stats_of e1 in
+      let sw := LambdaWeb.stats.stats_of ew in
+      let nw {A} (m : LambdaWeb.syntax.WM.t A) := show_N (N.of_nat (length (LambdaWeb.syntax.WM_elements m))) in
+      let bs (b : bool) := if b then "ok"%bs else "rejected"%bs in
+      let ar_c n := let La := LambdaWeb.ar_impl.ar_analyze_n n ed in
+                    (nw La ++ " " ++ bs (andb (LambdaWeb.ar_impl.La_ok La) (LambdaWeb.ar_impl.ar_ok La (M.empty _) ed)))%bs in
+      let cp_c n := let Lc := LambdaWeb.cp_impl.analyze_n n e1 in
+                    (nw Lc ++ " " ++ bs (LambdaWeb.cp_impl.cp_ok Lc (M.empty _) e1))%bs in
+      let ar_f := match LambdaWeb.ar_impl.ar_fix ed with
+                  | La :: _ => (nw La ++ " " ++ bs (andb (LambdaWeb.ar_impl.La_ok La) (LambdaWeb.ar_impl.ar_ok La (M.empty _) ed)))%bs
+                  | [] => "no solution"%bs end in
+      let cp_f := match LambdaWeb.cp_impl.cp_fix e1 with
+                  | Lc :: _ => (nw Lc ++ " " ++ bs (LambdaWeb.cp_impl.cp_ok Lc (M.empty _) e1))%bs
+                  | [] => "no solution"%bs end in
+      let dpe_f := match LambdaWeb.fixpoint.live_masks ea with
+                   | Some L => bs (LambdaWeb.dpe_impl.mchk L ea)
+                   | None => "no solution"%bs end in
+      let pp (a b : LambdaWeb.stats.stats) :=
+        ("parameters " ++ show_N (LambdaWeb.stats.n_param a) ++ " -> " ++ show_N (LambdaWeb.stats.n_param b) ++
+         ", arguments " ++ show_N (LambdaWeb.stats.n_arg a) ++ " -> " ++ show_N (LambdaWeb.stats.n_arg b) ++
+         ", bindings " ++ show_N (LambdaWeb.stats.n_bind a) ++ " -> " ++ show_N (LambdaWeb.stats.n_bind b))%bs in
       let msg := ("Web optimizations: " ++ (if fallback then "analysis fell back to the trivial solution; " else "") ++
                   show_stats (LambdaWeb.stats.stats_of e0) (LambdaWeb.stats.stats_of e1)
                              (LambdaWeb.stats.stats_of ew) ++
                   "; defunc: " ++ dmsg ++ ", new constructors " ++ show_N ndfn ++
-                  "; arity raising: webs " ++ show_N (N.of_nat (length (LambdaWeb.syntax.WM_elements La))) ++
+                  "; arity raising: webs " ++ nw La ++
                   ", flattened positions " ++ show_N nflat ++
                   ", parameters " ++ show_N (LambdaWeb.stats.n_param (LambdaWeb.stats.stats_of ed)) ++ " -> " ++
                   show_N (LambdaWeb.stats.n_param (LambdaWeb.stats.stats_of ea)) ++
                   ", arguments " ++ show_N (LambdaWeb.stats.n_arg (LambdaWeb.stats.stats_of ed)) ++ " -> " ++
-                  show_N (LambdaWeb.stats.n_arg (LambdaWeb.stats.stats_of ea)))%bs in
+                  show_N (LambdaWeb.stats.n_arg (LambdaWeb.stats.stats_of ea)) ++
+                  " [PASSES] AR fixpoint: " ++ ar_f ++ ", candidates by round 1/2/3: " ++ ar_c 1%nat ++ ", " ++ ar_c 2%nat ++ ", " ++ ar_c 3%nat ++
+                  "; AR " ++ pp sd sa ++ "; DPE fixpoint: " ++ dpe_f ++ "; DPE " ++ pp sa s1 ++
+                  "; CP fixpoint: " ++ cp_f ++ ", candidates by round 1/2/3: " ++ cp_c 1%nat ++ ", " ++ cp_c 2%nat ++ ", " ++ cp_c 3%nat ++
+                  "; CP " ++ pp s1 sw)%bs in
       (* internal webs get the tags of [tagf_glob], recorded in the function
          environment *)
       let e' := LambdaWeb.erase.erase_t LambdaWeb.retag.tagf_glob ew in

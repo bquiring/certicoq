@@ -525,6 +525,8 @@ extraction/select.mli
 extraction/select.ml
 extraction/dpe.mli
 extraction/dpe.ml
+extraction/fixpoint.mli
+extraction/fixpoint.ml
 extraction/dpe_impl.mli
 extraction/dpe_impl.ml
 extraction/cp.mli

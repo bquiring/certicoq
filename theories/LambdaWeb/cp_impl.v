@@ -21,6 +21,7 @@ From Stdlib Require Import NArith.BinNat ZArith.ZArith Lists.List Sets.Ensembles
 Require Import compcert.lib.Coqlib.
 From CertiRocq.LambdaANF Require Import Ensembles_util List_util tactics set_util.
 From CertiRocq.LambdaWeb Require Import syntax semantics exposed post select indep bound comp dpe cp dpe_impl.
+From CertiRocq.LambdaWeb Require fixpoint.
 
 Import ListNotations.
 
@@ -323,9 +324,26 @@ Fixpoint analyze_n (n : nat) (e : exp) : WM.t (list (option const_info)) :=
   | S n => analyze (analyze_n n e) e
   end.
 
-(** The most precise map that the checker accepts *)
+(** The constants of the known-constructor fixpoint of [fixpoint.v]: a
+    position is constant if it always receives the same nullary
+    constructor *)
+Definition cp_fix (e : exp) : list (WM.t (list (option const_info))) :=
+  match fixpoint.param_cons e with
+  | Some P =>
+      [fold_left (fun Lc '(w, vs) =>
+                    let cs := map (fun v => match v with
+                                            | fixpoint.CCon wc c O => Some (c, wc)
+                                            | _ => None
+                                            end) vs in
+                    if existsb (fun o : option const_info => match o with Some _ => true | None => false end) cs
+                    then WM.set w cs Lc else Lc) (WM_elements P) (WM.empty _)]
+  | None => []
+  end.
+
+(** The first map that the checker accepts: the fixpoint, or else the
+    rounds of the local analysis *)
 Definition choose_map (e : exp) : WM.t (list (option const_info)) :=
-  let cands := [analyze_n 3 e; analyze_n 2 e; analyze_n 1 e] in
+  let cands := cp_fix e ++ [analyze_n 3 e; analyze_n 2 e; analyze_n 1 e] in
   match find (fun Lc => cp_ok Lc (M.empty _) e) cands with
   | Some Lc => Lc
   | None => WM.empty _

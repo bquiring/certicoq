@@ -198,7 +198,7 @@ Proof.
   pose proof (passes.dfn_top_web_n_ext cenv0 e0) as Hd.
   pose proof (dfn_impl.dfn_top_ext cenv0 e0) as Hext.
   destruct (dfn_impl.dfn_top cenv0 e0) as [cenv' ed] eqn:Hdfn. destruct Hd as [_ Hd]. simpl in Hext.
-  set (ew := cp_impl.cp_top (dpe_impl.dpe_top (ar_impl.ar_top ed))).
+  set (ew := cp_impl.cp_top (dpe_impl.dpe_top (ar_impl.ar_top (dpe_impl.dpe_top ed)))).
   set (e' := erase.erase_t retag.tagf_glob ew).
   destruct (retag.fenv_of ew (fenv, true, 1%positive)) as [[fenv' tags_ok] maxt] eqn:Hfe.
   destruct (andb tags_ok (fnd e')) eqn:Hok.
@@ -211,7 +211,7 @@ Proof.
     unfold web_note. rewrite Hfr.
     exists ef, cf. split; [ reflexivity |]. split; [ split; assumption |]. split; [ exact Hmaxf |].
     exists cenv'. split; [ exact Hext |]. intros cenv Hc. right.
-    exists 1, 4, 1.
+    exists 1, 5, 1.
     destruct (hoist_correct.hoist_top_correct cenv e Hun Hdis) as (nh & Hsem & _ & _ & Hfvh & _).
     exists eh. split.
     { econstructor 1 with (P1 := hoisting_bound nh nh) (P2 := hoisting_bound nh nh).
@@ -221,8 +221,10 @@ Proof.
     exists e0. split.
     { rewrite He0. eapply fast.annotate_fast_correct. exact Hw_con. }
     exists ew. split.
-    { change 4 with (1 + 1 + 1 + 1). eapply comp.R_n_trans; [ eapply comp.R_n_trans; [ eapply comp.R_n_trans |] |].
+    { change 5 with (1 + 1 + 1 + 1 + 1).
+      eapply comp.R_n_trans; [ eapply comp.R_n_trans; [ eapply comp.R_n_trans; [ eapply comp.R_n_trans |] |] |].
       - eapply Hd. exact Hc.
+      - eapply passes.dpe_web_n.
       - eapply passes.ar_web_n.
       - eapply passes.dpe_web_n.
       - eapply passes.cp_web_n. }

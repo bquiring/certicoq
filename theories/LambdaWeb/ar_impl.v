@@ -23,6 +23,7 @@ Require Import compcert.lib.Coqlib.
 From CertiRocq.LambdaANF Require Import Ensembles_util List_util tactics set_util.
 From CertiRocq.LambdaWeb Require Import syntax semantics exposed post select indep bound comp dpe dpe_impl
      cp cp_impl ar.
+From CertiRocq.LambdaWeb Require fixpoint.
 
 Import ListNotations.
 
@@ -572,9 +573,36 @@ Fixpoint ar_analyze_n (n : nat) (e : exp) : WM.t (list (option shape)) :=
   | S n => ar_analyze (ar_analyze_n n e) e
   end.
 
-(** The most precise map that the checkers accept *)
+(** The shapes of the known-constructor fixpoint of [fixpoint.v]: a
+    position is flattened if it always receives the same internal
+    constructor with fields, and the record is only projected
+    ([fixpoint.escaping]), so that rebuilding it on entry does not
+    allocate once the projections are resolved *)
+Definition ar_fix (e : exp) : list (WM.t (list (option shape))) :=
+  match fixpoint.param_cons e with
+  | Some P =>
+      let sh (v : fixpoint.cval) : option shape :=
+        match v with fixpoint.CCon wc c n => usable (Some (wc, n, c)) | _ => None end in
+      let flat w i := match WM.get w P with
+                      | Some vs => match sh (nth i vs fixpoint.CBot) with Some _ => true | None => false end
+                      | None => false
+                      end in
+      match fixpoint.escaping e flat with
+      | Some Esc =>
+          [fold_left (fun La '(w, vs) =>
+                        let es := match WM.get w Esc with Some es => es | None => [] end in
+                        let ss := fixpoint.imap (fun i v => if nth i es true then None else sh v) vs in
+                        if existsb (fun o : option shape => match o with Some _ => true | None => false end) ss
+                        then WM.set w ss La else La) (WM_elements P) (WM.empty _)]
+      | None => []
+      end
+  | None => []
+  end.
+
+(** The first map that the checkers accept: the fixpoint, or else the
+    rounds of the local analysis *)
 Definition ar_choose (e : exp) : WM.t (list (option shape)) :=
-  let cands := [ar_analyze_n 3 e; ar_analyze_n 2 e; ar_analyze_n 1 e] in
+  let cands := ar_fix e ++ [ar_analyze_n 3 e; ar_analyze_n 2 e; ar_analyze_n 1 e] in
   match find (fun La => La_ok La && ar_ok La (M.empty _) e) cands with
   | Some La => La
   | None => WM.empty _

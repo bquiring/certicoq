@@ -51,7 +51,7 @@ Section Steps.
   Theorem dpe_web_n e : web_n cenv 1 e (dpe_top e).
   Proof.
     econstructor; [ eapply dpe_top_correct | | eapply dead_bound_web_post ].
-    eapply (proj1 (dpe.trans_occurs_free (masks e) (esize e))). eapply dpe_top_trans.
+    eapply (proj1 (dpe.trans_occurs_free (choose_masks e) (esize e))). eapply dpe_top_trans.
   Qed.
 
   Theorem cp_web_n e : web_n cenv 1 e (cp_top e).

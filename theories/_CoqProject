@@ -111,6 +111,7 @@ LambdaWeb/indep.v
 LambdaWeb/refl.v
 LambdaWeb/comp.v
 LambdaWeb/dpe.v
+LambdaWeb/fixpoint.v
 LambdaWeb/dpe_impl.v
 LambdaWeb/cp.v
 LambdaWeb/cp_impl.v

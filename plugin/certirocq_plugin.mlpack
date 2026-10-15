@@ -281,6 +281,7 @@ Cps
 Syntax
 Select
 Dpe
+Fixpoint
 Dpe_impl
 Cp
 Cp_impl
