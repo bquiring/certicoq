@@ -132,11 +132,11 @@ End Inline.
 
 Section LambdaLift.
 
-  Lemma lambda_lift_correct e c k l b :
+  Lemma lambda_lift_correct e c k l b g :
    well_scoped e ->
    max_var e 1 < state.next_var c ->
    exists (e' : exp) (c' : state.comp_data),
-     lambda_lift k l b e c = (Ret e', c') /\
+     lambda_lift k l b g e c = (Ret e', c') /\
      max_var e' 1 < state.next_var c' /\
      wf_pres e e' /\
      well_scoped e'  /\
@@ -168,8 +168,8 @@ Section LambdaLift.
       eassumption.
   Qed.
 
-  Corollary lambda_lift_correct_corr k l b :
-    correct (lambda_lift k l b).
+  Corollary lambda_lift_correct_corr k l b g :
+    correct (lambda_lift k l b g).
   Proof.
     intro; intros.
     edestruct lambda_lift_correct; eauto. destructAll.
@@ -618,7 +618,7 @@ Section Compose.
 
     eapply correct_cc_compose_l.
 
-    eapply correct_time. now eapply shrink_err_correct.
+    rewrite Hwebs. eapply correct_time. now eapply shrink_err_correct.
 
     eapply correct_cc_compose_l.
 

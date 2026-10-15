@@ -94,6 +94,12 @@ Section LambdaLifting.
      lifted function or the closure (i.e. the wrapper) *)
   Context (lift_dec : list var (* the free vars of the callee *) -> FVSet (* the vars is scope in the call site *) -> bool).
 
+  (* Whether closed functions are global: the functions that refer to them
+     are lifted without them as arguments.  With [false], a lifted function
+     that refers to a closed function (other than through a known call)
+     takes it as an argument. *)
+  Context (glob_closed : bool).
+
   Inductive VarInfo : Type :=
   (* A variable that is free in the current function definition.
    The first argument is the name of the parameter of the lambda
@@ -142,7 +148,7 @@ Section LambdaLifting.
       (* is the lifted function closed? *)
       let is_closed_lifted := (length fvs =? length args)%nat in
       (* if the function block is closed add it to the global function map *)
-      let gfuns'' := if is_closed then M.set f GFun gfuns' else gfuns' in
+      let gfuns'' := if glob_closed && is_closed then M.set f GFun gfuns' else gfuns' in
       if is_closed_lifted then
         (* Lift only if closed *)
         (* new name for lambda lifted definition - this function will always be known *)
@@ -508,8 +514,8 @@ Definition lift_all (fvs : list var) (scope : FVSet) := true.
 (* Never increase fvs *)
 Definition lift_conservative (fvs : list var) (scope : FVSet) := PS.subset (union_list PS.empty fvs) scope.
 
-Definition lambda_lift (args : nat) (no_push : nat) (inl : bool) (e : exp) (c : comp_data) : error exp * comp_data :=
-  let '(e', (c', _)) := run_compM (exp_lambda_lift args no_push (if inl then lift_all else lift_conservative)
+Definition lambda_lift (args : nat) (no_push : nat) (inl : bool) (glob : bool) (e : exp) (c : comp_data) : error exp * comp_data :=
+  let '(e', (c', _)) := run_compM (exp_lambda_lift args no_push (if inl then lift_all else lift_conservative) glob
                                                    e PS.empty PS.empty (Maps.PTree.empty VarInfo)
                                                    (Maps.PTree.empty FunInfo) (M.empty GFunInfo))
                                   c tt in

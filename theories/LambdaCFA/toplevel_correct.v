@@ -251,7 +251,7 @@ Proof.
   eapply correct_w_compose_l.
   { intros cenv. destruct (do_lambda_lift opts).
     eapply correct_time. now eapply lambda_lift_correct_corr. now eapply correct_id_trans. }
-  eapply correct_w_compose_l. { intros cenv. eapply correct_time. now eapply shrink_err_correct. }
+  eapply correct_w_compose_l. { intros cenv. rewrite Hw. now eapply correct_id_trans. }
   rewrite Hw. eapply correct_w_web. { eapply correct_web_time. eapply web_trans_correct. }
   intros cenv.
   eapply correct_cc_compose_r.

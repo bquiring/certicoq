@@ -292,10 +292,16 @@ Section IDENT.
       e <- (if inl_before anf_opts then
               time_anf "Inline/shrink loop" (inline_shrink_loop next_var 10 100) e
             else id_trans e) ;;
+      (* With the web optimizations, lambda lifting gives every function a
+         wrapper and its code, closed functions included, which
+         defunctionalization turns into records and dispatch.  Closed
+         functions are not global, so the code that uses one as a value
+         takes it as an argument, and its wrapper stays in place; and no
+         shrinking follows, which would inline the code into the wrappers. *)
       e <- (if (do_lambda_lift anf_opts) then
-              time_anf "Lambda lift" (lambda_lift (args anf_opts) (no_push anf_opts) (inl_wrappers anf_opts)) e
+              time_anf "Lambda lift" (lambda_lift (args anf_opts) (no_push anf_opts) (inl_wrappers anf_opts) (negb (webs anf_opts))) e
             else id_trans e) ;;
-      e <- time_anf "Shrink" shrink_err e;;
+      e <- (if webs anf_opts then id_trans e else time_anf "Shrink" shrink_err e);;
       e <- (if webs anf_opts then
               time_anf "Web optimizations" (web_trans cenv0) e
             else id_trans e) ;;
@@ -379,8 +385,9 @@ Section IDENT.
     {| time := Pipeline_utils.time opts;
        cps  := negb (Pipeline_utils.direct opts);
        do_lambda_lift := (1 <=? o_level opts);
-       args := if anf_conf opts =? 9 then 1000 else Pipeline_utils.c_args opts;
-       no_push := no_push;
+       (* With the web optimizations, lambda lift every function *)
+       args := if orb (anf_conf opts =? 9) (2 <=? o_level opts) then 1000 else Pipeline_utils.c_args opts;
+       no_push := if 2 <=? o_level opts then 1000 else no_push;
        inl_wrappers := inl_wrappers;
        inl_known    := inl_known;
        inl_before   := inl_before;

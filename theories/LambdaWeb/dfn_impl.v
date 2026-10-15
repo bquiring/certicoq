@@ -766,10 +766,11 @@ Qed.
 
 (** * The implementation *)
 
-(** Continuations are never duplicated: a duplicated continuation would
-    duplicate its bindings, and the rest of the compiler expects unique
-    bindings. *)
-Definition dfn_thr : nat := 0.
+(** Continuations up to this size are duplicated in the branches of a
+    dispatch; larger ones become a join point, which closure conversion
+    turns into a closure.  A duplicated continuation duplicates its
+    bindings; the compiler freshens the program after the web passes. *)
+Definition dfn_thr : nat := 8.
 
 (** The largest index of an internal web of a program: the join points get a
     fresh internal web above it. *)

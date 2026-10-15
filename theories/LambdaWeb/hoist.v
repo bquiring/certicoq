@@ -5,7 +5,7 @@
    wrap.  Lambda lifting produces closed code functions, but leaves them
    where they were defined.  This pass moves every bundle whose free
    variables are all functions of moved bundles to one bundle at the top of
-   the program.  It assumes that the bindings of the program are unique, as
+   the program, except the bundles of wrappers.  It assumes that the bindings of the program are unique, as
    they are in the compiler's pipeline.
 
    The pass checks its result: the free variables of each hoisted bundle
@@ -50,6 +50,31 @@ with bundles_fds (B : term.fundefs) (acc : list term.fundefs) : list term.fundef
 Definition bundle_fv (B : term.fundefs) : PS.t :=
   PS.diff (identifiers.fundefs_fv B) (fd_names B).
 
+(** Wrapper bundles stay where they are: each of their functions calls a
+    function of another bundle with its parameters followed by other
+    arguments.  Lambda lifting makes a wrapper for each lifted function;
+    defunctionalization turns the wrappers into records and dispatches to the
+    hoisted code. *)
+Fixpoint prefix_vars (xs ys : list term.var) : bool :=
+  match xs, ys with
+  | [], _ => true
+  | x :: xs, y :: ys => Pos.eqb x y && prefix_vars xs ys
+  | _, [] => false
+  end.
+
+Fixpoint wrappers_only (names : PS.t) (B : term.fundefs) : bool :=
+  match B with
+  | term.Fcons _ _ xs (term.Eapp g _ ys) B => negb (PS.mem g names) && prefix_vars xs ys && wrappers_only names B
+  | term.Fcons _ _ _ _ _ => false
+  | term.Fnil => true
+  end.
+
+Definition wrapper_bundle (B : term.fundefs) : bool :=
+  match B with
+  | term.Fnil => false
+  | _ => wrappers_only (fd_names B) B
+  end.
+
 (** The bundles that can be hoisted: the greatest set of bundles whose free
     variables are functions of the set *)
 Fixpoint hoistable (fuel : nat) (bs : list (PS.t * PS.t)) : list (PS.t * PS.t) :=
@@ -60,6 +85,24 @@ Fixpoint hoistable (fuel : nat) (bs : list (PS.t * PS.t)) : list (PS.t * PS.t) :
       let bs' := filter (fun '(_, fv) => PS.subset fv names) bs in
       if Nat.eqb (length bs') (length bs) then bs else hoistable fuel bs'
   end.
+
+(** The hoisted bundles, without the wrapper bundles that no other hoisted
+    bundle refers to *)
+Fixpoint needed_from (fuel : nat) (bs : list (PS.t * PS.t * bool)) (H : PS.t) : PS.t :=
+  match fuel with
+  | O => H
+  | S fuel =>
+      let fv := fold_left (fun acc (b : PS.t * PS.t * bool) =>
+                             let '(ns, fv, _) := b in if PS.subset ns H then PS.union fv acc else acc) bs PS.empty in
+      let H' := fold_left (fun acc (b : PS.t * PS.t * bool) =>
+                             let '(ns, _, w) := b in
+                             if w && negb (PS.is_empty (PS.inter ns fv)) then PS.union ns acc else acc) bs H in
+      if PS.equal H' H then H else needed_from fuel bs H'
+  end.
+
+Definition needed (fuel : nat) (bs : list (PS.t * PS.t * bool)) : PS.t :=
+  needed_from fuel bs (fold_left (fun acc (b : PS.t * PS.t * bool) =>
+                                    let '(ns, _, w) := b in if w then acc else PS.union ns acc) bs PS.empty).
 
 Section Strip.
 
@@ -130,9 +173,10 @@ Section Strip.
 End Strip.
 
 Definition hoist (e : term.exp) : term.exp :=
-  let bs := map (fun B => (fd_names B, bundle_fv B)) (bundles e []) in
-  let hs := hoistable (S (length bs)) bs in
-  let H := fold_left (fun acc '(ns, _) => PS.union ns acc) hs PS.empty in
+  let bs := map (fun B => (fd_names B, bundle_fv B, wrapper_bundle B)) (bundles e []) in
+  let hs := hoistable (S (length bs)) (map (fun (b : PS.t * PS.t * bool) => let '(ns, fv, _) := b in (ns, fv)) bs) in
+  let H0 := fold_left (fun acc '(ns, _) => PS.union ns acc) hs PS.empty in
+  let H := needed (S (length bs)) (filter (fun (b : PS.t * PS.t * bool) => let '(ns, _, _) := b in PS.subset ns H0) bs) in
   if PS.is_empty H then e else
     let '(e', Btop) := strip H e term.Fnil in
     if hcheck H (fd_names Btop) e && PS.subset (identifiers.exp_fv (term.Efun Btop e')) (identifiers.exp_fv e)

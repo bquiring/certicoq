@@ -1696,12 +1696,12 @@ Section Lambda_lifting_correct.
    Opaque preord_exp'.
 
 
-   Lemma lambda_lift_correct_top  (e : exp) (c : comp_data) k l b :
+   Lemma lambda_lift_correct_top  (e : exp) (c : comp_data) k l b g :
      unique_bindings e ->
      (max_var e 1%positive < next_var c)%positive ->
      Disjoint _ (bound_var e) (occurs_free e) ->
      exists e' c',
-       lambda_lift k l b e c = (Ret e', c') /\
+       lambda_lift k l b g e c = (Ret e', c') /\
        unique_bindings e' /\
        occurs_free e' \subset occurs_free e /\
        Disjoint _ (bound_var e') (occurs_free e') /\
@@ -1713,7 +1713,7 @@ Section Lambda_lifting_correct.
    Proof.
      intros Hun Hleq Hdis.
      set (lift_dec := if b then lift_all else lift_conservative).
-     assert (Hs := lambda_lifting_sound). destruct (Hs k l lift_dec) as [Hsound _]. clear Hs.
+     assert (Hs := lambda_lifting_sound). destruct (Hs k l lift_dec g) as [Hsound _]. clear Hs.
      specialize (Hsound e (M.empty _) (M.empty _) (M.empty _) PS.empty PS.empty (fun x => (max_var e 1%positive < x))%positive).
 
      rewrite !Dom_map_empty in Hsound.
@@ -1741,7 +1741,7 @@ Section Lambda_lifting_correct.
      unfold lambda_lift, triple in *.
      unfold run_compM, compM.runState in *. simpl in *.
 
-     destruct (exp_lambda_lift k l (if b then lift_all else lift_conservative) e PS.empty PS.empty
+     destruct (exp_lambda_lift k l (if b then lift_all else lift_conservative) g e PS.empty PS.empty
                                (PTree.empty VarInfo) (PTree.empty FunInfo) (M.empty GFunInfo)) eqn:Heqe.
      unfold lift_dec in *. rewrite Heqe in Hsound.
      destruct (runState tt (c, tt)) as [e' [c' u]] eqn:Hstate. simpl in *.

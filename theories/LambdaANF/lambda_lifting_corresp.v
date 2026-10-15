@@ -153,11 +153,11 @@ Section Lambda_lifting_corresp.
 
 
   (** [add_functions] is sound w.r.t. its relational spec *)
-  Lemma add_functions_true_sound B fvs sfvs args fm gfuns fvm S :
+  Lemma add_functions_true_sound gc B fvs sfvs args fm gfuns fvm S :
     Disjoint _ (S :|: bound_var_fundefs B) (Dom_map fvm) ->
     (Datatypes.length fvs =? Datatypes.length args)%nat = true ->
     {{ fun r s => fresh S (next_var (fst s)) }}
-      add_functions B fvs sfvs args fm gfuns
+      add_functions gc B fvs sfvs args fm gfuns
     {{ fun r s m s' =>
          let '(fm', gfuns') := m in
          exists σ ζ S',
@@ -206,12 +206,12 @@ Section Lambda_lifting_corresp.
       split. sets. split. simpl. sets. split. reflexivity. split. reflexivity. eassumption.
   Qed.
 
-  Lemma add_functions_false_sound B fvs sfvs args fm gfuns S :
+  Lemma add_functions_false_sound gc B fvs sfvs args fm gfuns S :
     Disjoint _ (bound_var_fundefs B) (Dom_map fm) ->
     unique_bindings_fundefs B ->
     (Datatypes.length fvs =? Datatypes.length args)%nat = false ->
     {{ fun r s => fresh S (next_var (fst s)) }}
-      add_functions B fvs sfvs args fm gfuns
+      add_functions gc B fvs sfvs args fm gfuns
     {{ fun r s m s' =>
          let '(fm', gfuns') := m in
          Dom_map fm' <--> Dom_map fm :|: name_in_fundefs B /\
@@ -759,7 +759,7 @@ Section Lambda_lifting_corresp.
   End TrueFV_correct.
 
   (** * The lambda lifting algorithm is sound w.r.t. its relational specification *)
-  Lemma lambda_lifting_sound max_args max_push lift_dec :
+  Lemma lambda_lifting_sound max_args max_push lift_dec gc :
     (forall (e : exp) (FVmap : VarInfoMap) (FNmap : FunInfoMap) (GFuns: GFunMap)
             (Scope AFuns : PS.t) (S : Ensemble var)
        (Hlf : Disjoint _ (LiftedFuns (fun_map FNmap)) (Union _ S (bound_var e)))
@@ -771,7 +771,7 @@ Section Lambda_lifting_corresp.
 
        (Hun : unique_bindings e),
        {{ fun r s => fresh S (next_var (fst s)) }}
-         exp_lambda_lift max_args max_push lift_dec e Scope AFuns FVmap FNmap GFuns
+         exp_lambda_lift max_args max_push lift_dec gc e Scope AFuns FVmap FNmap GFuns
        {{ fun r s e' s' =>
            exists S', Exp_lambda_lift (fun_map FNmap) (rename FVmap) e S e' S' /\
                       fresh S' (next_var (fst s'))
@@ -790,7 +790,7 @@ Section Lambda_lifting_corresp.
               (Disjoint _ (name_in_fundefs B) (domain (fun_map FNmap)) /\ Disjoint _ (name_in_fundefs B0) (domain (fun_map FNmap))  ))
        (Hdom : name_in_fundefs B \subset Dom_map FNmap),
        {{ fun r s => fresh S (next_var (fst s)) }}
-         fundefs_lambda_lift max_args max_push lift_dec B B0 names AFuns FVmap FNmap GFuns no
+         fundefs_lambda_lift max_args max_push lift_dec gc B B0 names AFuns FVmap FNmap GFuns no
          {{ fun r s B' s' =>
               exists S',
                 (name_in_fundefs B \subset domain (fun_map FNmap) ->
