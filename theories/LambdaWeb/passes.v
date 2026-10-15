@@ -126,6 +126,44 @@ Proof.
   - eapply (proj1 (dfn_ok_trans _ _ _ _ _ _ jw)). eassumption.
 Qed.
 
+(** Defunctionalization also holds in any extension of the extended
+    environment. *)
+Theorem dfn_top_web_n_ext cenv e :
+  let '(cenv', et) := dfn_top cenv e in
+  cenv_ext cenv cenv' /\ forall cenv'', cenv_ext cenv' cenv'' -> web_n cenv'' 1 e et.
+Proof.
+  unfold dfn_top.
+  destruct e; try (split; [ eapply cenv_ext_refl | intros; eapply web_n_refl ]).
+  match goal with
+  | [ |- context [ if ?b then _ else _ ] ] =>
+      destruct b eqn:Hchk; [| split; [ eapply cenv_ext_refl | intros; eapply web_n_refl ] ]
+  end.
+  repeat match goal with
+         | [ H : (_ && _) = true |- _ ] => apply andb_true_iff in H; destruct H
+         end.
+  set (r := analyze_dfn cenv f e) in *.
+  set (m := identifiers.max_var (erase (Efun f e)) 1%positive) in *.
+  set (jw := Pos.succ (max_iweb (Efun f e))) in *.
+  split.
+  { intros c i Hci. unfold r. rewrite r_cenv_eq. eapply ext_check_spec; eauto. }
+  intros cenv'' Hext.
+  eapply (dfn_trans_web_n cenv'' (r_L r) (r_T r) f).
+  - intros w lams HL.
+    match goal with Hh : hl_check _ _ = true |- _ => destruct (hl_check_spec _ _ Hh w lams HL) as [it Hit] end.
+    exists it. eapply Forall_impl; [| exact Hit ]. intros c [info [Hc Hi]].
+    exists info. split; [ eapply Hext; exact Hc | exact Hi ].
+  - eapply ht_check_spec; eassumption.
+  - do 3 eexists. split; [ reflexivity | split; [ reflexivity |] ].
+    split; [| split ].
+    + match goal with
+      | [ Hk : forallb (sel_w _) (fd_webs _) = true, Hfd : dfn_ok_fd _ _ _ _ _ _ [] [] f = true |- _ ] =>
+          pose proof (proj2 (dfn_ok_trans _ _ _ _ _ _ jw) f [] [] Hfd) as Hb;
+          rewrite (recs_with_keep _ _ _ _ Hk) in Hb; exact Hb
+      end.
+    + rewrite <- bnames_fnames. eapply nodupb_spec. eassumption.
+    + eapply (proj1 (dfn_ok_trans _ _ _ _ _ _ jw)). eassumption.
+Qed.
+
 (** * The λweb optimizer *)
 
 Definition web_opt (cenv : term.ctor_env) (e : exp) : term.ctor_env * exp :=

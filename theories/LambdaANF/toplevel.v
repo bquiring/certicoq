@@ -230,9 +230,10 @@ Section IDENT.
   (** Web optimizations: hoist the closed functions, annotate the program
       with webs by the 0-CFA, defunctionalize, run the other λweb passes, and
       erase the webs, with fresh function tags for the internal webs. *)
-  Definition web_trans : anf_trans :=
+  Definition web_trans (cenv : ctor_env) : anf_trans :=
     fun e c =>
-      let 'mkCompData nv nc ni nf cenv fenv names imap log := c in
+      let 'mkCompData nv nc ni nf _ fenv names imap log := c in
+      let e_in := e in
       let e := LambdaWeb.hoist.hoist e in
       let w_con := LambdaWeb.syntax.Exposed 1%positive in
       let '(sl, _) := LambdaCFA.fast.analyze_fast w_con e in
@@ -262,8 +263,12 @@ Section IDENT.
       let nc' := Pos.max nc (Pos.succ (max_key cenv')) in
       let ni' := Pos.max ni (Pos.succ (max_ind cenv')) in
       (* the web passes may reuse names (defunctionalization does); freshen
-         the program, as the rest of the pipeline expects unique bindings *)
-      web_note msg (freshen.freshen_top e' (mkCompData nv' nc' ni' (LambdaWeb.retag.rt_next s) cenv' (LambdaWeb.retag.rt_fenv s) names imap log)).
+         the program, as the rest of the pipeline expects unique bindings.
+         Freshening needs the functions of each bundle to have distinct
+         names; otherwise keep the program. *)
+      if freshen.fnd e' then
+        web_note msg (freshen.freshen_top e' (mkCompData nv' nc' ni' (LambdaWeb.retag.rt_next s) cenv' (LambdaWeb.retag.rt_fenv s) names imap log))
+      else (Ret e_in, c).
 
   Section Pipeline.
 
@@ -274,7 +279,9 @@ Section IDENT.
 
     (* Optimizing λANF pipeline *)
 
-    Definition anf_pipeline (e : exp) : anf_state exp :=
+    (** The passes, with the constructor environment [cenv0] for the web
+        optimizations *)
+    Definition anf_chain (cenv0 : ctor_env) (e : exp) : anf_state exp :=
       e <- time_anf "Shrink" shrink_err e;;
       e <- time_anf "Uncurry" (uncurry_top (cps anf_opts)) e ;;
       e <- time_anf "Inline uncurry wrappers" (inline_uncurry next_var 10 100) e ;;
@@ -286,7 +293,7 @@ Section IDENT.
             else id_trans e) ;;
       e <- time_anf "Shrink" shrink_err e;;
       e <- (if webs anf_opts then
-              time_anf "Web optimizations" web_trans e
+              time_anf "Web optimizations" (web_trans cenv0) e
             else id_trans e) ;;
       e <- time_anf "Closure conversion and hoisting" (closure_conversion_hoist clo_tag clo_ind_tag) e ;;
       e <- time_anf "Shrink" shrink_err e;;
@@ -301,6 +308,11 @@ Section IDENT.
               time_anf "Inline known functions inside wrappers" (inline_lifted next_var 10 1000) e
             else id_trans e) ;;
       ret e.
+
+    (** The web optimizations use the constructor environment the pipeline
+        starts with, which the λANF passes before them do not change. *)
+    Definition anf_pipeline (e : exp) : anf_state exp :=
+      fun c0 => anf_chain (state.cenv c0) e c0.
 
 
     Definition run_anf_pipeline (t : LambdaANF_FullTerm) : error LambdaANF_FullTerm * string :=

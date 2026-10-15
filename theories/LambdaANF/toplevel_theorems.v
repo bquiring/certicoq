@@ -583,13 +583,13 @@ Section Compose.
     clear. firstorder.
   Qed.
 
-  (** The web optimizations are not covered yet. *)
-  Theorem anf_pipeline_correct opts v :
+  (** Without the web optimizations; [toplevel_correct.v] covers them. *)
+  Theorem anf_chain_correct opts v cenv0 :
     webs opts = false ->
-    correct_cc cenv clo_tag (anf_pipeline v opts).
+    correct_cc cenv clo_tag (anf_chain v opts cenv0).
   Proof.
     intros Hwebs Heq.
-    unfold anf_pipeline.
+    unfold anf_chain.
     eapply correct_cc_compose_l.
 
     eapply correct_time.
@@ -659,7 +659,12 @@ Section Compose.
     now eapply correct_id_trans.
   Qed.
 
-
+  Theorem anf_pipeline_correct opts v :
+    webs opts = false ->
+    correct_cc cenv clo_tag (anf_pipeline v opts).
+  Proof.
+    intros Hwebs e c. unfold anf_pipeline. eapply anf_chain_correct. exact Hwebs.
+  Qed.
 
   (* Top-level correctness for whole programs *)
   Corollary anf_pipeline_whole_program_correct var opts e c :

@@ -134,6 +134,7 @@ LambdaCFA/impl.v
 LambdaCFA/impl_complete.v
 LambdaCFA/fast.v
 LambdaCFA/compile.v
+LambdaCFA/toplevel_correct.v
 
 # Codegen
 Codegen/tactics.v

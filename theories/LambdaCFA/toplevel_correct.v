@@ -1,0 +1,342 @@
+(* Top-level correctness of the λANF pipeline with the web optimizations
+   ([toplevel.v], [-O 2]).
+
+   The web step
+
+     hoist ⇝ 0-CFA ⇝ defunc ⇝ arity raising ⇝ DPE ⇝ CP ⇝ erase ⇝ freshen
+
+   is a λANF step, an annotation, λweb steps, an erasure and a λANF step:
+   the relation [pipeline_rel] of [LambdaWeb/pipeline.v].  Defunctionalization
+   adds constructors to the constructor environment, so the relations of
+   the step hold in any environment that extends the extended one, and the
+   compiled program is evaluated in it.  The λANF passes are correct in any
+   environment.
+
+   The theorem for whole programs: the compiled program refines the source,
+   the source evaluated in the environment the pipeline starts with, and the
+   compiled program in an extension of it. *)
+
+From Stdlib Require Import NArith.BinNat Relations.Relations Lists.List micromega.Lia Sets.Ensembles.
+
+Require Import LambdaANF.term LambdaANF.eval LambdaANF.term_util LambdaANF.identifiers LambdaANF.set_util
+        LambdaANF.Ensembles_util LambdaANF.List_util LambdaANF.tactics LambdaANF.rel_comp
+        LambdaANF.bounds LambdaANF.shrink_cps_toplevel LambdaANF.toplevel LambdaANF.toplevel_theorems
+        LambdaANF.freshen LambdaANF.freshen_correct.
+Require Import Common.compM.
+Require Import compcert.lib.Coqlib.
+From CertiRocq.LambdaWeb Require syntax semantics comp anno erase pipeline passes retag hoist hoist_correct
+     dfn_impl ar_impl dpe_impl cp_impl.
+From CertiRocq.LambdaCFA Require fast compile sound.
+
+Require Import ExtLib.Structures.Monad.
+Import ListNotations MonadNotation.
+Open Scope monad_scope.
+
+Close Scope Z_scope.
+Local Open Scope nat_scope.
+
+Existing Instance bounds.fuel_res.
+Existing Instance bounds.trace_res.
+
+(** * λANF evaluation in an extended constructor environment *)
+
+Lemma bstep_fuel_cenv_ext cenv cenv' rho e c r t :
+  passes.cenv_ext cenv cenv' ->
+  bstep_fuel cenv rho e c r t -> bstep_fuel cenv' rho e c r t.
+Proof.
+  intros Hext H.
+  eapply (@bstep_fuel_ind' cenv _ _ _ _
+            (fun rho e c r t => bstep cenv' rho e c r t)
+            (fun rho e c r t => bstep_fuel cenv' rho e c r t)); eauto;
+    intros; try (econstructor; eauto; fail).
+  econstructor; eauto. eapply dfn_impl.caseConsistent_ext; eauto.
+Qed.
+
+Lemma diverge_cenv_ext cenv cenv' rho e :
+  passes.cenv_ext cenv cenv' -> diverge cenv rho e -> diverge cenv' rho e.
+Proof.
+  intros Hext Hd c. destruct (Hd c) as [t Ht]. exists t. eapply bstep_fuel_cenv_ext; eassumption.
+Qed.
+
+Lemma cenv_ext_trans c1 c2 c3 : passes.cenv_ext c1 c2 -> passes.cenv_ext c2 c3 -> passes.cenv_ext c1 c3.
+Proof. intros H1 H2 c i H. eauto. Qed.
+
+(** The compiled program refines the source, evaluated in two environments *)
+Definition refines_ext (cenv cenv' : ctor_env) (vref : val -> val -> Prop) (e1 e2 : exp) :=
+  (forall v1 c1 t1, bstep_fuel cenv rel_comp.emp e1 c1 (Res v1) t1 ->
+                    exists v2 c2 t2, bstep_fuel cenv' rel_comp.emp e2 c2 (Res v2) t2 /\ vref v1 v2) /\
+  (diverge cenv rel_comp.emp e1 -> diverge cenv' rel_comp.emp e2).
+
+(** * The relations *)
+
+Definition w_con := syntax.Exposed 1%positive.
+
+Lemma Hw_con : syntax.exposedb w_con = true.
+Proof. reflexivity. Qed.
+
+(** The web step *)
+Definition web_rel (cenv : ctor_env) (e1 e2 : exp) : Prop :=
+  exists n1 n2 n3 tagf,
+    (forall t n, tagf (syntax.Exposed t) n = t) /\
+    pipeline.pipeline_rel cenv w_con sound.P_eq sound.P_eq tagf compile.P_eq_e compile.P_eq_e n1 n2 n3 e1 e2.
+
+(** The passes up to closure conversion *)
+Definition pre_rel (cenv : ctor_env) (e1 e2 : exp) : Prop :=
+  (exists n, pipeline.anf_n cenv n e1 e2) \/ web_rel cenv e1 e2.
+
+(** The whole pipeline *)
+Definition top_rel (cenv : ctor_env) (e1 e2 : exp) : Prop :=
+  exists e, pre_rel cenv e1 e /\
+            exists n m, R_n_exp cenv clo_tag wf_pres (post_prop cenv) (simple_bound 0) (simple_bound 0) n m e e2.
+
+(** The specification of the pipeline: from the environment [cenv0], the
+    compilation extends it to [cenvw], and the relation holds in any
+    extension of [cenvw]. *)
+Definition correct_w (cenv0 : ctor_env) (trans : anf_trans) :=
+  forall e c,
+    well_scoped e ->
+    (max_var e 1 < state.next_var c)%positive ->
+    exists e' c',
+      trans e c = (Ret e', c') /\
+      well_scoped e' /\
+      (max_var e' 1 < state.next_var c')%positive /\
+      exists cenvw, passes.cenv_ext cenv0 cenvw /\
+                    forall cenv, passes.cenv_ext cenvw cenv -> top_rel cenv e e'.
+
+(** The specification of the web step *)
+Definition correct_web (cenv0 : ctor_env) (trans : anf_trans) :=
+  forall e c,
+    well_scoped e ->
+    (max_var e 1 < state.next_var c)%positive ->
+    exists e' c',
+      trans e c = (Ret e', c') /\
+      well_scoped e' /\
+      (max_var e' 1 < state.next_var c')%positive /\
+      exists cenvw, passes.cenv_ext cenv0 cenvw /\
+                    forall cenv, passes.cenv_ext cenvw cenv -> pre_rel cenv e e'.
+
+(** * Composition *)
+
+Transparent bind.
+
+Lemma pre_rel_anf_l cenv n e1 e2 e3 :
+  pipeline.anf_n cenv n e1 e2 -> pre_rel cenv e2 e3 -> pre_rel cenv e1 e3.
+Proof.
+  intros H1 [[m H2] | (n1 & n2 & n3 & tagf & Htag & e4 & H24 & H4)].
+  - left. exists (n + m). econstructor 2; eassumption.
+  - right. exists (n + n1), n2, n3, tagf. split; [ exact Htag |].
+    exists e4. split; [ econstructor 2; eassumption | exact H4 ].
+Qed.
+
+Lemma correct_w_compose_l cenv0 (t1 t2 : anf_trans) :
+  (forall cenv, correct cenv t1) ->
+  correct_w cenv0 t2 ->
+  correct_w cenv0 (fun e => e <- t1 e;; t2 e).
+Proof.
+  intros Ht1 Ht2 e c Hws Hmax.
+  destruct (Ht1 cenv0 e c Hws Hmax) as (e1 & c1 & Hr1 & Hws1 & Hmax1 & _).
+  destruct (Ht2 e1 c1 Hws1 Hmax1) as (e2 & c2 & Hr2 & Hws2 & Hmax2 & cenvw & Hext & Hrel).
+  exists e2, c2. split; [ simpl; unfold bind; cbn; rewrite Hr1, Hr2; reflexivity |].
+  split; [ exact Hws2 | split; [ exact Hmax2 |] ].
+  exists cenvw. split; [ exact Hext |]. intros cenv Hc.
+  destruct (Ht1 cenv e c Hws Hmax) as (e1' & c1' & Hr1' & _ & _ & n & Hn).
+  rewrite Hr1 in Hr1'. inv Hr1'.
+  destruct (Hrel cenv Hc) as (e3 & Hpre & Hcc).
+  exists e3. split; [| exact Hcc ]. eapply pre_rel_anf_l; eassumption.
+Qed.
+
+Lemma correct_w_time cenv0 (t : anf_trans) o s :
+  correct_w cenv0 t -> correct_w cenv0 (time_anf o s t).
+Proof. unfold time_anf. intros H. destruct (time o); eauto. Qed.
+
+Lemma correct_web_time cenv0 (t : anf_trans) o s :
+  correct_web cenv0 t -> correct_web cenv0 (time_anf o s t).
+Proof. unfold time_anf. intros H. destruct (time o); eauto. Qed.
+
+Lemma correct_w_web cenv0 (t1 t2 : anf_trans) :
+  correct_web cenv0 t1 ->
+  (forall cenv, correct_cc cenv clo_tag t2) ->
+  correct_w cenv0 (fun e => e <- t1 e;; t2 e).
+Proof.
+  intros Ht1 Ht2 e c Hws Hmax.
+  destruct (Ht1 e c Hws Hmax) as (e1 & c1 & Hr1 & Hws1 & Hmax1 & cenvw & Hext & Hrel).
+  destruct (Ht2 cenv0 e1 c1 Hws1 Hmax1) as (e2 & c2 & Hr2 & Hws2 & Hmax2 & _).
+  exists e2, c2. split; [ simpl; unfold bind; cbn; rewrite Hr1, Hr2; reflexivity |].
+  split; [ exact Hws2 | split; [ exact Hmax2 |] ].
+  exists cenvw. split; [ exact Hext |]. intros cenv Hc.
+  destruct (Ht2 cenv e1 c1 Hws1 Hmax1) as (e2' & c2' & Hr2' & _ & _ & n & m & Hnm).
+  rewrite Hr2 in Hr2'. inv Hr2'.
+  exists e1. split; [ exact (Hrel cenv Hc) | exists n, m; exact Hnm ].
+Qed.
+
+Lemma correct_web_id cenv0 : correct_web cenv0 id_trans.
+Proof.
+  intros e c Hws Hmax. exists e, c. split; [ reflexivity |]. split; [ exact Hws | split; [ exact Hmax |] ].
+  exists cenv0. split; [ eapply passes.cenv_ext_refl |]. intros cenv _. left. exists 1.
+  eapply preord_exp_n_refl. intros e1. intros z Hz; exact Hz.
+Qed.
+
+(** * The web step *)
+
+Theorem web_trans_correct cenv0 : correct_web cenv0 (web_trans cenv0).
+Proof.
+  intros e c Hws Hmax.
+  destruct c as [nv nc ni nf cenvc fenv names imap log].
+  pose proof Hws as [Hun Hdis].
+  unfold web_trans.
+  set (eh := hoist.hoist e).
+  match goal with |- context [ fast.analyze_fast ?w ?ee ] => destruct (fast.analyze_fast w ee) as [sl x] eqn:Han end.
+  match goal with |- context [ dfn_impl.dfn_top cenv0 ?ee ] => set (e0 := ee) end.
+  assert (He0 : e0 = fast.annotate_fast w_con eh) by (unfold fast.annotate_fast; unfold w_con; rewrite Han; reflexivity).
+  pose proof (passes.dfn_top_web_n_ext cenv0 e0) as Hd.
+  destruct (dfn_impl.dfn_top cenv0 e0) as [cenv' ed] eqn:Hdfn. destruct Hd as [Hext Hd].
+  set (ew := cp_impl.cp_top (dpe_impl.dpe_top (ar_impl.ar_top ed))).
+  match goal with |- context [ retag.erase_rt ew ?st ] =>
+    pose proof (retag.erase_rt_erase_t ew st) as Her;
+    destruct (retag.erase_rt ew st) as [e' s] eqn:Hrt
+  end. simpl in Her.
+  destruct (fnd e') eqn:Hfnd.
+  - match goal with
+    | |- context [ freshen_top e' ?c' ] =>
+        assert (Hmax' : (max_var e' 1 < state.next_var c')%positive) by (simpl; lia);
+        destruct (freshen_top_correct e' c' Hmax' Hfnd) as (ef & cf & Hfr & Ha & Hubf & Hdisf & Hfvf & Hmaxf)
+    end.
+    unfold web_note. rewrite Hfr.
+    exists ef, cf. split; [ reflexivity |]. split; [ split; assumption |]. split; [ exact Hmaxf |].
+    exists cenv'. split; [ exact Hext |]. intros cenv Hc. right.
+    exists 1, 4, 1, (retag.tagf_of s). split; [ reflexivity |].
+    destruct (hoist_correct.hoist_top_correct cenv e Hun Hdis) as (nh & Hsem & _ & _ & Hfvh & _).
+    exists eh. split.
+    { econstructor 1 with (P1 := hoisting_bound nh nh) (P2 := hoisting_bound nh nh).
+      - intros k rho1 rho2 Henv _. eapply Hsem. exact Henv.
+      - exact Hfvh.
+      - split; [ eapply hoisting_bound_compat; lia | eapply hoisting_bound_post_upper_bound ]. }
+    exists e0. split.
+    { rewrite He0. eapply fast.annotate_fast_correct. exact Hw_con. }
+    exists ew. split.
+    { change 4 with (1 + 1 + 1 + 1). eapply comp.R_n_trans; [ eapply comp.R_n_trans; [ eapply comp.R_n_trans |] |].
+      - eapply Hd. exact Hc.
+      - eapply passes.ar_web_n.
+      - eapply passes.dpe_web_n.
+      - eapply passes.cp_web_n. }
+    exists e'. split.
+    { rewrite Her. eapply erase.erase_correct. eapply compile.P_eq_e_properties. }
+    econstructor 1 with (P1 := simple_bound 0) (P2 := simple_bound 0).
+    + intros k rho1 rho2 Henv _. eapply Alpha_conv_id_preord; [ eapply simple_bound_compat | exact Ha | exact Henv ].
+    + intros z Hz. apply Hfvf. exact Hz.
+    + split; [ eapply simple_bound_compat | eapply simple_bound_post_upper_bound ].
+  - exists e. eexists. split; [ reflexivity |]. split; [ exact Hws | split; [ exact Hmax |] ].
+    exists cenv0. split; [ eapply passes.cenv_ext_refl |]. intros cenv _. left. exists 1.
+    eapply preord_exp_n_refl. intros e1. intros z Hz; exact Hz.
+Qed.
+
+(** * The pipeline *)
+
+Theorem anf_chain_web_correct v opts cenv0 :
+  webs opts = true -> correct_w cenv0 (anf_chain v opts cenv0).
+Proof.
+  intros Hw. unfold anf_chain.
+  eapply correct_w_compose_l. { intros cenv. eapply correct_time. now eapply shrink_err_correct. }
+  eapply correct_w_compose_l. { intros cenv. eapply correct_time. now eapply uncurry_top_correct_corr. }
+  eapply correct_w_compose_l. { intros cenv. eapply correct_time. now eapply inline_uncurry_cor. }
+  eapply correct_w_compose_l.
+  { intros cenv. destruct (inl_before opts).
+    eapply correct_time. now eapply inline_loop_correct. now eapply correct_id_trans. }
+  eapply correct_w_compose_l.
+  { intros cenv. destruct (do_lambda_lift opts).
+    eapply correct_time. now eapply lambda_lift_correct_corr. now eapply correct_id_trans. }
+  eapply correct_w_compose_l. { intros cenv. eapply correct_time. now eapply shrink_err_correct. }
+  rewrite Hw. eapply correct_w_web. { eapply correct_web_time. eapply web_trans_correct. }
+  intros cenv.
+  eapply correct_cc_compose_r.
+  eapply correct_cc_time. now eapply closure_conversion_hoist_correct.
+  eapply correct_compose.
+  eapply correct_time. now eapply shrink_err_correct.
+  eapply correct_compose.
+  destruct (inl_after opts).
+  eapply correct_time. now eapply inline_loop_correct.
+  now eapply correct_id_trans.
+  eapply correct_compose.
+  destruct (dpe opts).
+  eapply correct_time. now eapply DPE_correct_corr.
+  now eapply correct_id_trans.
+  eapply correct_compose.
+  eapply correct_time. now eapply shrink_err_correct.
+  eapply correct_compose.
+  destruct (inl_known opts).
+  eapply correct_time.
+  unfold inline_lifted. now eapply inline_correct_cor.
+  now eapply correct_id_trans.
+  now eapply correct_id_trans.
+Qed.
+
+(** * Whole programs *)
+
+Lemma pre_rel_preserves_fv cenv e1 e2 :
+  pre_rel cenv e1 e2 -> occurs_free e2 \subset occurs_free e1.
+Proof.
+  intros [[n H] | (n1 & n2 & n3 & tagf & _ & e3 & H13 & e4 & H34 & e5 & H45 & e6 & H56 & H62)].
+  - eapply pipeline.anf_n_preserves_fv. eassumption.
+  - eapply Included_trans; [| eapply pipeline.anf_n_preserves_fv; eassumption ].
+    eapply Included_trans; [| eapply H34 ].
+    eapply Included_trans; [| eapply pipeline.web_n_preserves_fv; eassumption ].
+    eapply Included_trans; [ eapply pipeline.anf_n_preserves_fv; eassumption | eapply H56 ].
+Qed.
+
+Lemma pre_rel_refines cenv e1 e2 :
+  closed_exp e1 -> pre_rel cenv e1 e2 -> refines cenv value_ref e1 e2.
+Proof.
+  intros Hc [[n H] | (n1 & n2 & n3 & tagf & Htag & H)].
+  - eapply pipeline.anf_n_refines; eassumption.
+  - eapply pipeline.pipeline_refines; eauto;
+      first [ exact Hw_con | eapply sound.P_eq_properties | eapply sound.P_eq_upper_bound
+            | eapply compile.P_eq_e_properties | eapply compile.P_eq_e_upper_bound ].
+Qed.
+
+Lemma top_rel_refines_ext cenvA cenvB e1 e2 :
+  closed_exp e1 -> passes.cenv_ext cenvA cenvB -> top_rel cenvB e1 e2 ->
+  refines_ext cenvA cenvB value_ref_cc e1 e2.
+Proof.
+  intros Hc Hext (e & Hpre & n & m & Hcc).
+  assert (Hce : closed_exp e).
+  { split; [| sets ]. eapply Included_trans; [ eapply pre_rel_preserves_fv; eassumption | eapply Hc ]. }
+  destruct (pre_rel_refines _ _ _ Hc Hpre) as [Ht1 Hd1].
+  assert (Href : refines cenvB value_ref_cc e e2).
+  { eapply R_n_exp_in_refines; eauto.
+    clear; now firstorder.
+    clear; now firstorder.
+    eapply simple_bound_post_upper_bound. }
+  destruct Href as [Ht2 Hd2].
+  split.
+  - intros v1 c1 t1 Hs. eapply bstep_fuel_cenv_ext in Hs; [| exact Hext ].
+    edestruct Ht1 as (v2 & c2 & t2 & Hs2 & Hr2); [ exact Hs |].
+    edestruct Ht2 as (v3 & c3 & t3 & Hs3 & Hr3); [ exact Hs2 |].
+    do 3 eexists. split; [ exact Hs3 | eapply value_ref_compose_l; eassumption ].
+  - intros Hdiv. eapply Hd2, Hd1. eapply diverge_cenv_ext; eassumption.
+Qed.
+
+(** The compiled program refines the source, the source evaluated in the
+    environment the pipeline starts with, and the compiled program in an
+    extension of it (by the constructors of defunctionalization). *)
+Theorem anf_pipeline_whole_program_correct' v opts e c :
+  closed_exp e ->
+  well_scoped e ->
+  (max_var e 1 < state.next_var c)%positive ->
+  exists e' c',
+    anf_pipeline v opts e c = (Ret e', c') /\
+    exists cenv', passes.cenv_ext (state.cenv c) cenv' /\
+                  refines_ext (state.cenv c) cenv' value_ref_cc e e'.
+Proof.
+  intros Hc Hws Hmax. unfold anf_pipeline.
+  destruct (webs opts) eqn:Hw.
+  - destruct (anf_chain_web_correct v opts (state.cenv c) Hw e c Hws Hmax)
+      as (e' & c' & Hr & _ & _ & cenvw & Hext & Hrel).
+    exists e', c'. split; [ exact Hr |]. exists cenvw. split; [ exact Hext |].
+    eapply top_rel_refines_ext; [ exact Hc | exact Hext | eapply Hrel; eapply passes.cenv_ext_refl ].
+  - destruct (anf_chain_correct (state.cenv c) opts v (state.cenv c) Hw e c Hws Hmax)
+      as (e' & c' & Hr & _ & _ & n & m & Hcc).
+    exists e', c'. split; [ exact Hr |]. exists (state.cenv c). split; [ eapply passes.cenv_ext_refl |].
+    eapply top_rel_refines_ext; [ exact Hc | eapply passes.cenv_ext_refl |].
+    exists e. split; [ left; exists 1; eapply preord_exp_n_refl; intros e1 z Hz; exact Hz |].
+    exists n, m. exact Hcc.
+Qed.
