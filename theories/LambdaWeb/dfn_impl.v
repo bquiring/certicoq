@@ -565,6 +565,30 @@ Definition mk_arg (E : list var) (rs : list rec) (z : var) : arg :=
   | None => AEnv (index_of z E)
   end.
 
+(** The variables that occur other than as the function of a call *)
+Fixpoint esc_vars (e : exp) : PS.t :=
+  match e with
+  | Econstr _ _ _ ys k => union_list (esc_vars k) ys
+  | Eproj _ _ _ _ y k => PS.add y (esc_vars k)
+  | Ecase x _ cl =>
+      (fix go (cl : list (ctor_tag * exp)) :=
+         match cl with
+         | [] => PS.singleton x
+         | (_, e) :: cl => PS.union (esc_vars e) (go cl)
+         end) cl
+  | Eletapp _ _ _ ys k => union_list (esc_vars k) ys
+  | Efun B k => PS.union (esc_vars_fd B) (esc_vars k)
+  | Eapp _ _ ys => union_list PS.empty ys
+  | Eprim_val _ _ k => esc_vars k
+  | Eprim _ _ ys k => union_list (esc_vars k) ys
+  | Ehalt x => PS.singleton x
+  end
+with esc_vars_fd (B : fundefs) : PS.t :=
+  match B with
+  | Fcons _ _ _ e B => PS.union (esc_vars e) (esc_vars_fd B)
+  | Fnil => PS.empty
+  end.
+
 Record dfn_result : Type :=
   { r_L : WM.t (list ctor_tag);
     r_T : M.t (var * web * nat * list arg);
@@ -610,6 +634,23 @@ Section Analysis.
                       | _, _ => (tagof, L, c)
                       end) inner_funs (M.empty _, WM.empty _, tag_base).
 
+  (** ** Heuristics: which webs to defunctionalize
+
+      A web is worth defunctionalizing if it has at least two functions and
+      one of them escapes (it occurs other than as the function of a call):
+      otherwise every call is to a known function. *)
+  Definition escaping : PS.t :=
+    fold_left (fun acc e => PS.union (esc_vars e) acc) (fd_bodies Btop) (esc_vars e0).
+
+  Definition worth (tagof : M.t ctor_tag) (lams : list ctor_tag) : bool :=
+    Nat.leb 2 (length lams) &&
+    existsb (fun '(f, c) => PS.mem f escaping && existsb (Pos.eqb c) lams) (M.elements tagof).
+
+  Definition assign_sel : M.t ctor_tag * WM.t (list ctor_tag) * positive :=
+    let '(tagof, L, c) := assign in
+    (tagof, fold_left (fun acc '(w, lams) => if worth tagof lams then WM.set w lams acc else acc)
+                      (WM_elements L) (WM.empty _), c).
+
   Definition inner_bundles : list fundefs :=
     concat (map bundles_of (fd_bodies Btop)) ++ bundles_of e0.
 
@@ -629,7 +670,7 @@ Section Analysis.
 
   (** One fresh inductive type per selected web *)
   Definition new_ctors : list (ctor_tag * term.ctor_ty_info) :=
-    let '(tagof, L, _) := assign in
+    let '(tagof, L, _) := assign_sel in
     let T := table L tagof in
     fst (fold_left (fun '(acc, it) '(w, lams) =>
                       (acc ++ map (fun '(i, c) =>
@@ -645,7 +686,7 @@ Section Analysis.
                        Pos.succ it)) (WM_elements L) ([], ind_base)).
 
   Definition analyze_dfn : dfn_result :=
-    let '(tagof, L, _) := assign in
+    let '(tagof, L, _) := assign_sel in
     {| r_L := L; r_T := table L tagof; r_tagof := tagof;
        r_cenv := fold_left (fun acc '(c, info) => M.set c info acc) new_ctors cenv |}.
 
@@ -654,7 +695,7 @@ End Analysis.
 Lemma r_cenv_eq cenv Btop e0 :
   r_cenv (analyze_dfn cenv Btop e0) =
   fold_left (fun acc '(c, info) => M.set c info acc) (new_ctors cenv Btop e0) cenv.
-Proof. unfold analyze_dfn. destruct (assign cenv Btop e0) as [[? ?] ?]. reflexivity. Qed.
+Proof. unfold analyze_dfn. destruct (assign_sel cenv Btop e0) as [[? ?] ?]. reflexivity. Qed.
 
 (** ** Checks of the hypotheses of the correctness theorem *)
 
