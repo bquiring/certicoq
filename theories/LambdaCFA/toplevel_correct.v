@@ -14,7 +14,15 @@
 
    The theorem for whole programs: the compiled program refines the source,
    the source evaluated in the environment the pipeline starts with, and the
-   compiled program in an extension of it. *)
+   compiled program in an extension of it.
+
+   Linking: units compiled separately, each with or without the web
+   optimizations, link.  Internal webs get tags from a fixed function
+   ([retag.tagf_glob]), so all units erase with the same tag function, and
+   a unit compiled without the web step is related through λweb by the
+   trivial annotation, which erases back to it.  The linked program is
+   evaluated in an environment that extends the environments of both
+   units. *)
 
 From Stdlib Require Import NArith.BinNat Relations.Relations Lists.List micromega.Lia Sets.Ensembles.
 
@@ -76,9 +84,8 @@ Proof. reflexivity. Qed.
 
 (** The web step *)
 Definition web_rel (cenv : ctor_env) (e1 e2 : exp) : Prop :=
-  exists n1 n2 n3 tagf,
-    (forall t n, tagf (syntax.Exposed t) n = t) /\
-    pipeline.pipeline_rel cenv w_con sound.P_eq sound.P_eq tagf compile.P_eq_e compile.P_eq_e n1 n2 n3 e1 e2.
+  exists n1 n2 n3,
+    pipeline.pipeline_rel cenv w_con sound.P_eq sound.P_eq retag.tagf_glob compile.P_eq_e compile.P_eq_e n1 n2 n3 e1 e2.
 
 (** The passes up to closure conversion *)
 Definition pre_rel (cenv : ctor_env) (e1 e2 : exp) : Prop :=
@@ -122,9 +129,9 @@ Transparent bind.
 Lemma pre_rel_anf_l cenv n e1 e2 e3 :
   pipeline.anf_n cenv n e1 e2 -> pre_rel cenv e2 e3 -> pre_rel cenv e1 e3.
 Proof.
-  intros H1 [[m H2] | (n1 & n2 & n3 & tagf & Htag & e4 & H24 & H4)].
+  intros H1 [[m H2] | (n1 & n2 & n3 & e4 & H24 & H4)].
   - left. exists (n + m). econstructor 2; eassumption.
-  - right. exists (n + n1), n2, n3, tagf. split; [ exact Htag |].
+  - right. exists (n + n1), n2, n3.
     exists e4. split; [ econstructor 2; eassumption | exact H4 ].
 Qed.
 
@@ -191,12 +198,11 @@ Proof.
   pose proof (passes.dfn_top_web_n_ext cenv0 e0) as Hd.
   destruct (dfn_impl.dfn_top cenv0 e0) as [cenv' ed] eqn:Hdfn. destruct Hd as [Hext Hd].
   set (ew := cp_impl.cp_top (dpe_impl.dpe_top (ar_impl.ar_top ed))).
-  match goal with |- context [ retag.erase_rt ew ?st ] =>
-    pose proof (retag.erase_rt_erase_t ew st) as Her;
-    destruct (retag.erase_rt ew st) as [e' s] eqn:Hrt
-  end. simpl in Her.
-  destruct (fnd e') eqn:Hfnd.
-  - match goal with
+  set (e' := erase.erase_t retag.tagf_glob ew).
+  destruct (retag.fenv_of ew (fenv, true, 1%positive)) as [[fenv' tags_ok] maxt] eqn:Hfe.
+  destruct (andb tags_ok (fnd e')) eqn:Hok.
+  - apply andb_prop in Hok as [_ Hfnd].
+    match goal with
     | |- context [ freshen_top e' ?c' ] =>
         assert (Hmax' : (max_var e' 1 < state.next_var c')%positive) by (simpl; lia);
         destruct (freshen_top_correct e' c' Hmax' Hfnd) as (ef & cf & Hfr & Ha & Hubf & Hdisf & Hfvf & Hmaxf)
@@ -204,7 +210,7 @@ Proof.
     unfold web_note. rewrite Hfr.
     exists ef, cf. split; [ reflexivity |]. split; [ split; assumption |]. split; [ exact Hmaxf |].
     exists cenv'. split; [ exact Hext |]. intros cenv Hc. right.
-    exists 1, 4, 1, (retag.tagf_of s). split; [ reflexivity |].
+    exists 1, 4, 1.
     destruct (hoist_correct.hoist_top_correct cenv e Hun Hdis) as (nh & Hsem & _ & _ & Hfvh & _).
     exists eh. split.
     { econstructor 1 with (P1 := hoisting_bound nh nh) (P2 := hoisting_bound nh nh).
@@ -220,7 +226,7 @@ Proof.
       - eapply passes.dpe_web_n.
       - eapply passes.cp_web_n. }
     exists e'. split.
-    { rewrite Her. eapply erase.erase_correct. eapply compile.P_eq_e_properties. }
+    { eapply erase.erase_correct. eapply compile.P_eq_e_properties. }
     econstructor 1 with (P1 := simple_bound 0) (P2 := simple_bound 0).
     + intros k rho1 rho2 Henv _. eapply Alpha_conv_id_preord; [ eapply simple_bound_compat | exact Ha | exact Henv ].
     + intros z Hz. apply Hfvf. exact Hz.
@@ -275,7 +281,7 @@ Qed.
 Lemma pre_rel_preserves_fv cenv e1 e2 :
   pre_rel cenv e1 e2 -> occurs_free e2 \subset occurs_free e1.
 Proof.
-  intros [[n H] | (n1 & n2 & n3 & tagf & _ & e3 & H13 & e4 & H34 & e5 & H45 & e6 & H56 & H62)].
+  intros [[n H] | (n1 & n2 & n3 & e3 & H13 & e4 & H34 & e5 & H45 & e6 & H56 & H62)].
   - eapply pipeline.anf_n_preserves_fv. eassumption.
   - eapply Included_trans; [| eapply pipeline.anf_n_preserves_fv; eassumption ].
     eapply Included_trans; [| eapply H34 ].
@@ -286,7 +292,7 @@ Qed.
 Lemma pre_rel_refines cenv e1 e2 :
   closed_exp e1 -> pre_rel cenv e1 e2 -> refines cenv value_ref e1 e2.
 Proof.
-  intros Hc [[n H] | (n1 & n2 & n3 & tagf & Htag & H)].
+  intros Hc [[n H] | (n1 & n2 & n3 & H)].
   - eapply pipeline.anf_n_refines; eassumption.
   - eapply pipeline.pipeline_refines; eauto;
       first [ exact Hw_con | eapply sound.P_eq_properties | eapply sound.P_eq_upper_bound
@@ -339,4 +345,121 @@ Proof.
     eapply top_rel_refines_ext; [ exact Hc | eapply passes.cenv_ext_refl |].
     exists e. split; [ left; exists 1; eapply preord_exp_n_refl; intros e1 z Hz; exact Hz |].
     exists n, m. exact Hcc.
+Qed.
+
+(** * Linking *)
+
+(** The trivial annotation: every function is exposed with its λANF tag as
+    its web.  It erases back to the program, so a unit compiled without the
+    web optimizations is also related through λweb, and links with units
+    compiled with them. *)
+Lemma erase_anno_triv :
+  (forall e, erase.erase_t retag.tagf_glob (impl.anno w_con impl.triv e) = e) /\
+  (forall B, erase.erase_t_fundefs retag.tagf_glob (impl.anno_fds w_con impl.triv B) = B).
+Proof.
+  eapply exp_def_mutual_ind; intros; simpl; try reflexivity; try congruence.
+  match goal with
+  | IHe : erase.erase_t _ (impl.anno _ _ ?e) = ?e, IHl : erase.erase_t _ (impl.anno _ _ (Ecase _ _)) = _ |- _ =>
+      simpl in IHl; injection IHl as IHl'; rewrite IHe; f_equal; f_equal; exact IHl'
+  end.
+Qed.
+
+Lemma anno_triv_correct cenv e :
+  anno.E_anno_top cenv w_con sound.P_eq sound.P_eq e (impl.anno w_con impl.triv e).
+Proof. eapply (sound.ok_top_E_anno cenv w_con Hw_con impl.triv). eapply impl.triv_top. Qed.
+
+Lemma pre_rel_web cenv e1 e2 : pre_rel cenv e1 e2 -> web_rel cenv e1 e2.
+Proof.
+  intros [[n H] | H]; [| exact H ].
+  exists n, 1, 1.
+  exists e2. split; [ exact H |].
+  exists (impl.anno w_con impl.triv e2). split; [ eapply anno_triv_correct |].
+  exists (impl.anno w_con impl.triv e2). split; [ eapply passes.web_n_refl |].
+  exists e2. split.
+  - pose proof (compile.P_eq_e_properties cenv retag.tagf_glob) as Hpp.
+    pose proof (erase.erase_correct cenv retag.tagf_glob compile.P_eq_e compile.P_eq_e
+                  (impl.anno w_con impl.triv e2)) as He.
+    rewrite (proj1 erase_anno_triv) in He. eapply He.
+  - eapply preord_exp_n_refl. intros e3 z Hz; exact Hz.
+Qed.
+
+(** The pipeline, with or without the web optimizations *)
+Theorem anf_pipeline_spec v opts e c :
+  well_scoped e ->
+  (max_var e 1 < state.next_var c)%positive ->
+  exists e' c',
+    anf_pipeline v opts e c = (Ret e', c') /\
+    exists cenvw, passes.cenv_ext (state.cenv c) cenvw /\
+                  forall cenv, passes.cenv_ext cenvw cenv -> top_rel cenv e e'.
+Proof.
+  intros Hws Hmax. unfold anf_pipeline.
+  destruct (webs opts) eqn:Hw.
+  - destruct (anf_chain_web_correct v opts (state.cenv c) Hw e c Hws Hmax)
+      as (e' & c' & Hr & _ & _ & cenvw & Hext & Hrel).
+    exists e', c'. split; [ exact Hr |]. exists cenvw. split; [ exact Hext | exact Hrel ].
+  - destruct (anf_chain_correct (state.cenv c) opts v (state.cenv c) Hw e c Hws Hmax)
+      as (e' & c' & Hr & _ & _ & _).
+    exists e', c'. split; [ exact Hr |]. exists (state.cenv c). split; [ eapply passes.cenv_ext_refl |].
+    intros cenv _.
+    destruct (anf_chain_correct cenv opts v (state.cenv c) Hw e c Hws Hmax)
+      as (e'' & c'' & Hr' & _ & _ & n & m & Hcc).
+    rewrite Hr in Hr'. inv Hr'.
+    exists e. split; [ left; exists 1; eapply preord_exp_n_refl; intros e1 z Hz; exact Hz |].
+    exists n, m. exact Hcc.
+Qed.
+
+Lemma top_rel_preserves_linking cenv lf x e1 e2 e1' e2' :
+  closed_exp e1 ->
+  occurs_free e2 \subset [set x] ->
+  top_rel cenv e1 e1' ->
+  top_rel cenv e2 e2' ->
+  top_rel cenv (link lf x e1 e2) (link lf x e1' e2').
+Proof.
+  intros Hc Hfv (m1 & Hpre1 & n1 & k1 & Hcc1) (m2 & Hpre2 & n2 & k2 & Hcc2).
+  assert (Hcm : closed_exp m1).
+  { split; [| sets ]. eapply Included_trans; [ eapply pre_rel_preserves_fv; eassumption | eapply Hc ]. }
+  assert (Hfvm : occurs_free m2 \subset [set x]).
+  { eapply Included_trans; [ eapply pre_rel_preserves_fv; eassumption | exact Hfv ]. }
+  destruct (pre_rel_web _ _ _ Hpre1) as (a1 & b1 & c1 & Hp1).
+  destruct (pre_rel_web _ _ _ Hpre2) as (a2 & b2 & c2 & Hp2).
+  exists (link lf x m1 m2). split.
+  - right. exists (a1 + a2), (b1 + b2), (c1 + c2).
+    eapply pipeline.pipeline_preserves_linking; eauto;
+      first [ exact Hw_con | eapply sound.P_eq_properties | eapply retag.tagf_glob_exposed
+            | eapply compile.P_eq_e_properties ].
+  - exists (n1 + n2), (k1 + k2). eapply Rel_exp_n_preserves_linking; eauto.
+    + intros. eapply H.
+    + eapply simple_bound_compat.
+Qed.
+
+(** Separately compiled units link, each with or without the web
+    optimizations.  Each unit extends the constructor environment it starts
+    with; the linked program is evaluated in any environment that extends
+    both (the units' new constructors must not clash), and the source in
+    any environment it extends. *)
+Theorem anf_pipeline_linking_correct' lf x v1 v2 o1 o2 e1 e2 c1 c2 :
+  closed_exp e1 ->
+  well_scoped e1 ->
+  (max_var e1 1 < state.next_var c1)%positive ->
+  occurs_free e2 \subset [set x] ->
+  well_scoped e2 ->
+  (max_var e2 1 < state.next_var c2)%positive ->
+  exists e1' e2' c1' c2',
+    anf_pipeline v1 o1 e1 c1 = (Ret e1', c1') /\
+    anf_pipeline v2 o2 e2 c2 = (Ret e2', c2') /\
+    exists cenv1 cenv2,
+      passes.cenv_ext (state.cenv c1) cenv1 /\
+      passes.cenv_ext (state.cenv c2) cenv2 /\
+      forall cenv cenv',
+        passes.cenv_ext cenv1 cenv' -> passes.cenv_ext cenv2 cenv' -> passes.cenv_ext cenv cenv' ->
+        refines_ext cenv cenv' value_ref_cc (link lf x e1 e2) (link lf x e1' e2').
+Proof.
+  intros Hc1 Hws1 Hmax1 Hfv2 Hws2 Hmax2.
+  destruct (anf_pipeline_spec v1 o1 e1 c1 Hws1 Hmax1) as (e1' & c1' & Hr1 & cenv1 & Hext1 & Hrel1).
+  destruct (anf_pipeline_spec v2 o2 e2 c2 Hws2 Hmax2) as (e2' & c2' & Hr2 & cenv2 & Hext2 & Hrel2).
+  exists e1', e2', c1', c2'. split; [ exact Hr1 | split; [ exact Hr2 |] ].
+  exists cenv1, cenv2. split; [ exact Hext1 | split; [ exact Hext2 |] ].
+  intros cenv cenv' H1 H2 H3.
+  eapply top_rel_refines_ext; [ eapply link_closed; eassumption | exact H3 |].
+  eapply top_rel_preserves_linking; [ exact Hc1 | exact Hfv2 | eapply Hrel1; exact H1 | eapply Hrel2; exact H2 ].
 Qed.

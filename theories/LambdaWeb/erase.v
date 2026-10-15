@@ -33,8 +33,8 @@ Notation abstep_fuel := CertiRocq.LambdaANF.eval.bstep_fuel.
 
 (** * Erasure with a tag function
 
-    [erase] maps a function web to its index.  The compiler instead gives a
-    fresh function tag to each internal web and arity ([retag.v]); erasure
+    [erase] maps a function web to its index.  The compiler instead gives
+    each internal web and arity its own tag ([retag.tagf_glob]); erasure
     with a tag function [tagf] covers both.  A call and the function it
     calls share a web and, when the call succeeds, an arity, so they agree
     on the tag. *)

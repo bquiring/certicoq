@@ -6,7 +6,7 @@ From CertiRocq Require Import
      LambdaANF.closure_conversion LambdaANF.hoisting LambdaANF.dead_param_elim LambdaANF.lambda_lifting
      LambdaANF.freshen.
 From CertiRocq.LambdaBox_to_LambdaANF Require Import common.
-From CertiRocq.LambdaWeb Require syntax retag dpe_impl cp_impl ar ar_impl dfn_impl hoist stats.
+From CertiRocq.LambdaWeb Require syntax erase retag dpe_impl cp_impl ar ar_impl dfn_impl hoist stats.
 From MetaRocq.Utils Require MRString.
 From CertiRocq.LambdaCFA Require impl fast.
 From CertiRocq.LambdaBox_to_LambdaANF Require anf cps.
@@ -258,16 +258,20 @@ Section IDENT.
                   show_N (LambdaWeb.stats.n_param (LambdaWeb.stats.stats_of ea)) ++
                   ", arguments " ++ show_N (LambdaWeb.stats.n_arg (LambdaWeb.stats.stats_of ed)) ++ " -> " ++
                   show_N (LambdaWeb.stats.n_arg (LambdaWeb.stats.stats_of ea)))%bs in
-      let '(e', s) := LambdaWeb.retag.erase_rt ew (LambdaWeb.retag.mk_rt (M.empty _) nf fenv) in
+      (* internal webs get the tags of [tagf_glob], recorded in the function
+         environment *)
+      let e' := LambdaWeb.erase.erase_t LambdaWeb.retag.tagf_glob ew in
+      let '(fenv', tags_ok, maxt) := LambdaWeb.retag.fenv_of ew (fenv, true, 1%positive) in
       let nv' := Pos.max nv (Pos.succ (identifiers.max_var e' 1%positive)) in
       let nc' := Pos.max nc (Pos.succ (max_key cenv')) in
       let ni' := Pos.max ni (Pos.succ (max_ind cenv')) in
+      let nf' := Pos.max nf (Pos.succ maxt) in
       (* the web passes may reuse names (defunctionalization does); freshen
          the program, as the rest of the pipeline expects unique bindings.
          Freshening needs the functions of each bundle to have distinct
-         names; otherwise keep the program. *)
-      if freshen.fnd e' then
-        web_note msg (freshen.freshen_top e' (mkCompData nv' nc' ni' (LambdaWeb.retag.rt_next s) cenv' (LambdaWeb.retag.rt_fenv s) names imap log))
+         names; otherwise, or if the tags clash, keep the program. *)
+      if andb tags_ok (freshen.fnd e') then
+        web_note msg (freshen.freshen_top e' (mkCompData nv' nc' ni' nf' cenv' fenv' names imap log))
       else (Ret e_in, c).
 
   Section Pipeline.
