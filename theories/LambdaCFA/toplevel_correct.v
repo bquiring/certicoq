@@ -107,7 +107,7 @@ Definition correct_w (cenv0 : ctor_env) (trans : anf_trans) :=
       trans e c = (Ret e', c') /\
       well_scoped e' /\
       (max_var e' 1 < state.next_var c')%positive /\
-      exists cenvw, passes.cenv_ext cenv0 cenvw /\
+      exists cenvw, dfn_impl.dfn_ext cenv0 cenvw /\
                     forall cenv, passes.cenv_ext cenvw cenv -> top_rel cenv e e'.
 
 (** The specification of the web step *)
@@ -119,7 +119,7 @@ Definition correct_web (cenv0 : ctor_env) (trans : anf_trans) :=
       trans e c = (Ret e', c') /\
       well_scoped e' /\
       (max_var e' 1 < state.next_var c')%positive /\
-      exists cenvw, passes.cenv_ext cenv0 cenvw /\
+      exists cenvw, dfn_impl.dfn_ext cenv0 cenvw /\
                     forall cenv, passes.cenv_ext cenvw cenv -> pre_rel cenv e e'.
 
 (** * Composition *)
@@ -179,7 +179,7 @@ Qed.
 Lemma correct_web_id cenv0 : correct_web cenv0 id_trans.
 Proof.
   intros e c Hws Hmax. exists e, c. split; [ reflexivity |]. split; [ exact Hws | split; [ exact Hmax |] ].
-  exists cenv0. split; [ eapply passes.cenv_ext_refl |]. intros cenv _. left. exists 1.
+  exists cenv0. split; [ eapply dfn_impl.dfn_ext_refl |]. intros cenv _. left. exists 1.
   eapply preord_exp_n_refl. intros e1. intros z Hz; exact Hz.
 Qed.
 
@@ -196,7 +196,8 @@ Proof.
   match goal with |- context [ dfn_impl.dfn_top cenv0 ?ee ] => set (e0 := ee) end.
   assert (He0 : e0 = fast.annotate_fast w_con eh) by (unfold fast.annotate_fast; unfold w_con; rewrite Han; reflexivity).
   pose proof (passes.dfn_top_web_n_ext cenv0 e0) as Hd.
-  destruct (dfn_impl.dfn_top cenv0 e0) as [cenv' ed] eqn:Hdfn. destruct Hd as [Hext Hd].
+  pose proof (dfn_impl.dfn_top_ext cenv0 e0) as Hext.
+  destruct (dfn_impl.dfn_top cenv0 e0) as [cenv' ed] eqn:Hdfn. destruct Hd as [_ Hd]. simpl in Hext.
   set (ew := cp_impl.cp_top (dpe_impl.dpe_top (ar_impl.ar_top ed))).
   set (e' := erase.erase_t retag.tagf_glob ew).
   destruct (retag.fenv_of ew (fenv, true, 1%positive)) as [[fenv' tags_ok] maxt] eqn:Hfe.
@@ -232,7 +233,7 @@ Proof.
     + intros z Hz. apply Hfvf. exact Hz.
     + split; [ eapply simple_bound_compat | eapply simple_bound_post_upper_bound ].
   - exists e. eexists. split; [ reflexivity |]. split; [ exact Hws | split; [ exact Hmax |] ].
-    exists cenv0. split; [ eapply passes.cenv_ext_refl |]. intros cenv _. left. exists 1.
+    exists cenv0. split; [ eapply dfn_impl.dfn_ext_refl |]. intros cenv _. left. exists 1.
     eapply preord_exp_n_refl. intros e1. intros z Hz; exact Hz.
 Qed.
 
@@ -330,7 +331,7 @@ Theorem anf_pipeline_whole_program_correct' v opts e c :
   (max_var e 1 < state.next_var c)%positive ->
   exists e' c',
     anf_pipeline v opts e c = (Ret e', c') /\
-    exists cenv', passes.cenv_ext (state.cenv c) cenv' /\
+    exists cenv', dfn_impl.dfn_ext (state.cenv c) cenv' /\
                   refines_ext (state.cenv c) cenv' value_ref_cc e e'.
 Proof.
   intros Hc Hws Hmax. unfold anf_pipeline.
@@ -338,10 +339,10 @@ Proof.
   - destruct (anf_chain_web_correct v opts (state.cenv c) Hw e c Hws Hmax)
       as (e' & c' & Hr & _ & _ & cenvw & Hext & Hrel).
     exists e', c'. split; [ exact Hr |]. exists cenvw. split; [ exact Hext |].
-    eapply top_rel_refines_ext; [ exact Hc | exact Hext | eapply Hrel; eapply passes.cenv_ext_refl ].
+    eapply top_rel_refines_ext; [ exact Hc | exact (proj1 Hext) | eapply Hrel; eapply passes.cenv_ext_refl ].
   - destruct (anf_chain_correct (state.cenv c) opts v (state.cenv c) Hw e c Hws Hmax)
       as (e' & c' & Hr & _ & _ & n & m & Hcc).
-    exists e', c'. split; [ exact Hr |]. exists (state.cenv c). split; [ eapply passes.cenv_ext_refl |].
+    exists e', c'. split; [ exact Hr |]. exists (state.cenv c). split; [ eapply dfn_impl.dfn_ext_refl |].
     eapply top_rel_refines_ext; [ exact Hc | eapply passes.cenv_ext_refl |].
     exists e. split; [ left; exists 1; eapply preord_exp_n_refl; intros e1 z Hz; exact Hz |].
     exists n, m. exact Hcc.
@@ -389,7 +390,7 @@ Theorem anf_pipeline_spec v opts e c :
   (max_var e 1 < state.next_var c)%positive ->
   exists e' c',
     anf_pipeline v opts e c = (Ret e', c') /\
-    exists cenvw, passes.cenv_ext (state.cenv c) cenvw /\
+    exists cenvw, dfn_impl.dfn_ext (state.cenv c) cenvw /\
                   forall cenv, passes.cenv_ext cenvw cenv -> top_rel cenv e e'.
 Proof.
   intros Hws Hmax. unfold anf_pipeline.
@@ -399,7 +400,7 @@ Proof.
     exists e', c'. split; [ exact Hr |]. exists cenvw. split; [ exact Hext | exact Hrel ].
   - destruct (anf_chain_correct (state.cenv c) opts v (state.cenv c) Hw e c Hws Hmax)
       as (e' & c' & Hr & _ & _ & _).
-    exists e', c'. split; [ exact Hr |]. exists (state.cenv c). split; [ eapply passes.cenv_ext_refl |].
+    exists e', c'. split; [ exact Hr |]. exists (state.cenv c). split; [ eapply dfn_impl.dfn_ext_refl |].
     intros cenv _.
     destruct (anf_chain_correct cenv opts v (state.cenv c) Hw e c Hws Hmax)
       as (e'' & c'' & Hr' & _ & _ & n & m & Hcc).
@@ -435,8 +436,8 @@ Qed.
 (** Separately compiled units link, each with or without the web
     optimizations.  Each unit extends the constructor environment it starts
     with; the linked program is evaluated in any environment that extends
-    both (the units' new constructors must not clash), and the source in
-    any environment it extends. *)
+    both, and the source in any environment it extends.  Such an
+    environment always exists ([anf_pipeline_linking_correct] below). *)
 Theorem anf_pipeline_linking_correct' lf x v1 v2 o1 o2 e1 e2 c1 c2 :
   closed_exp e1 ->
   well_scoped e1 ->
@@ -448,8 +449,8 @@ Theorem anf_pipeline_linking_correct' lf x v1 v2 o1 o2 e1 e2 c1 c2 :
     anf_pipeline v1 o1 e1 c1 = (Ret e1', c1') /\
     anf_pipeline v2 o2 e2 c2 = (Ret e2', c2') /\
     exists cenv1 cenv2,
-      passes.cenv_ext (state.cenv c1) cenv1 /\
-      passes.cenv_ext (state.cenv c2) cenv2 /\
+      dfn_impl.dfn_ext (state.cenv c1) cenv1 /\
+      dfn_impl.dfn_ext (state.cenv c2) cenv2 /\
       forall cenv cenv',
         passes.cenv_ext cenv1 cenv' -> passes.cenv_ext cenv2 cenv' -> passes.cenv_ext cenv cenv' ->
         refines_ext cenv cenv' value_ref_cc (link lf x e1 e2) (link lf x e1' e2').
@@ -462,4 +463,71 @@ Proof.
   intros cenv cenv' H1 H2 H3.
   eapply top_rel_refines_ext; [ eapply link_closed; eassumption | exact H3 |].
   eapply top_rel_preserves_linking; [ exact Hc1 | exact Hfv2 | eapply Hrel1; exact H1 | eapply Hrel2; exact H2 ].
+Qed.
+
+(** * Linking without disjoint constructors
+
+    Defunctionalization gives its constructors tags in a reserved range,
+    with information that is a function of the tag ([dfn_impl.dfn_info]).
+    Units that pick the same tag therefore agree on its constructor, so the
+    environments of any two units have a common extension, provided the
+    source environment does not use the reserved range. *)
+
+Definition unreserved (cenv : ctor_env) : Prop :=
+  forall c i, cenv ! c = Some i -> (c < dfn_impl.res_base)%positive.
+
+Definition pick {A} (o1 o2 : option A) : option A :=
+  match o1 with Some _ => o1 | None => o2 end.
+
+Lemma dfn_ext_join b1 x1 b2 x2 cenv :
+  dfn_impl.dfn_ext b1 x1 -> dfn_impl.dfn_ext b2 x2 ->
+  passes.cenv_ext b1 cenv -> passes.cenv_ext b2 cenv -> unreserved cenv ->
+  exists cenv', passes.cenv_ext x1 cenv' /\ passes.cenv_ext x2 cenv' /\ passes.cenv_ext cenv cenv'.
+Proof.
+  intros [_ H1] [_ H2] Hb1 Hb2 Hu.
+  set (m := PTree.combine pick cenv x1).
+  exists (PTree.combine pick m x2).
+  assert (Hm : forall c, m ! c = pick (cenv ! c) (x1 ! c)) by (intros c; unfold m; rewrite PTree.gcombine; reflexivity).
+  assert (Hg : forall c, (PTree.combine pick m x2) ! c = pick (m ! c) (x2 ! c))
+    by (intros c; rewrite PTree.gcombine; reflexivity).
+  assert (Hres : forall c i, (dfn_impl.res_base <= c)%positive -> cenv ! c = Some i -> False)
+    by (intros c i Hc Hci; specialize (Hu c i Hci); lia).
+  split; [| split ].
+  - intros c i Hc. rewrite Hg, Hm. destruct (H1 c i Hc) as [Hb | [Hr ->]].
+    + rewrite (Hb1 _ _ Hb). reflexivity.
+    + destruct (cenv ! c) eqn:Hce; [ exfalso; eapply Hres; eassumption |]. simpl. rewrite Hc. reflexivity.
+  - intros c i Hc. rewrite Hg, Hm. destruct (H2 c i Hc) as [Hb | [Hr ->]].
+    + rewrite (Hb2 _ _ Hb). reflexivity.
+    + destruct (cenv ! c) eqn:Hce; [ exfalso; eapply Hres; eassumption |]. simpl.
+      destruct (x1 ! c) eqn:Hx1; [| simpl; rewrite Hc; reflexivity ].
+      destruct (H1 c _ Hx1) as [Hb | [_ ->]]; [| reflexivity ].
+      rewrite (Hb1 _ _ Hb) in Hce. discriminate.
+  - intros c i Hc. rewrite Hg, Hm, Hc. reflexivity.
+Qed.
+
+(** Separately compiled units link, each with or without the web
+    optimizations: the linked program is evaluated in an extension of the
+    source environment, which only has to avoid the reserved tags. *)
+Theorem anf_pipeline_linking_correct lf x v1 v2 o1 o2 e1 e2 c1 c2 :
+  closed_exp e1 ->
+  well_scoped e1 ->
+  (max_var e1 1 < state.next_var c1)%positive ->
+  occurs_free e2 \subset [set x] ->
+  well_scoped e2 ->
+  (max_var e2 1 < state.next_var c2)%positive ->
+  exists e1' e2' c1' c2',
+    anf_pipeline v1 o1 e1 c1 = (Ret e1', c1') /\
+    anf_pipeline v2 o2 e2 c2 = (Ret e2', c2') /\
+    forall cenv,
+      passes.cenv_ext (state.cenv c1) cenv -> passes.cenv_ext (state.cenv c2) cenv -> unreserved cenv ->
+      exists cenv', passes.cenv_ext cenv cenv' /\
+                    refines_ext cenv cenv' value_ref_cc (link lf x e1 e2) (link lf x e1' e2').
+Proof.
+  intros Hc1 Hws1 Hmax1 Hfv2 Hws2 Hmax2.
+  destruct (anf_pipeline_linking_correct' lf x v1 v2 o1 o2 e1 e2 c1 c2 Hc1 Hws1 Hmax1 Hfv2 Hws2 Hmax2)
+    as (e1' & e2' & c1' & c2' & Hr1 & Hr2 & cenv1 & cenv2 & Hx1 & Hx2 & Hall).
+  exists e1', e2', c1', c2'. split; [ exact Hr1 | split; [ exact Hr2 |] ].
+  intros cenv Hb1 Hb2 Hu.
+  destruct (dfn_ext_join _ _ _ _ _ Hx1 Hx2 Hb1 Hb2 Hu) as (cenv' & H1 & H2 & H3).
+  exists cenv'. split; [ exact H3 | eapply Hall; eassumption ].
 Qed.
