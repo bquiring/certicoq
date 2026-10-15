@@ -1,0 +1,9 @@
+cps
+parse
+relabel_bench
+compile
+stream_bench
+queens
+sort
+pipeline
+fmap_bench

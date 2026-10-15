@@ -1,0 +1,8 @@
+build/
+CertiRocq.Tests.hobench.*
+glue_*
+*.vo
+*.vok
+*.vos
+*.glob
+.*.aux
