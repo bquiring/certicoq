@@ -1,0 +1,8 @@
+build/
+*.c
+*.h
+*.glob
+*.vo
+*.vok
+*.vos
+!main.c
