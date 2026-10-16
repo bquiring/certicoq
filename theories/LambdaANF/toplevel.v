@@ -244,9 +244,16 @@ Section IDENT.
       (* remove the functions left dead, before arity raising *)
       let ed := LambdaWeb.dpe_impl.dpe_top ed0 in
       let ndfn := (N.of_nat (length (M.elements cenv')) - N.of_nat (length (M.elements cenv)))%N in
-      let La := LambdaWeb.ar_impl.ar_choose ed in
-      let nflat := N.of_nat (length (filter (fun o : option LambdaWeb.ar.shape => match o with Some _ => true | None => false end)
-                                            (concat (map snd (LambdaWeb.syntax.WM_elements La))))) in
+      let La := snd (LambdaWeb.ar_impl.ar_choose ed) in
+      let npos (f : LambdaWeb.ar.pos -> bool) :=
+        N.of_nat (length (filter f (concat (map snd (LambdaWeb.syntax.WM_elements La))))) in
+      let nflat := npos (fun p => match p with LambdaWeb.ar.Flat _ => true | _ => false end) in
+      let nknown := npos (fun p => match p with LambdaWeb.ar.Known _ => true | _ => false end) in
+      let nshaped := npos (fun p => match p with LambdaWeb.ar.Known (Some _) => true | _ => false end) in
+      let nesc := npos (fun p => match p with
+                                 | LambdaWeb.ar.Known (Some s) =>
+                                     match LambdaWeb.ar_impl.usable (Some s) with Some _ => true | None => false end
+                                 | _ => false end) in
       let ea := LambdaWeb.ar_impl.ar_top ed in
       let e1 := LambdaWeb.dpe_impl.dpe_top ea in
       let ew := LambdaWeb.cp_impl.cp_top e1 in
@@ -256,12 +263,23 @@ Section IDENT.
       let sw := LambdaWeb.stats.stats_of ew in
       let nw {A} (m : LambdaWeb.syntax.WM.t A) := show_N (N.of_nat (length (LambdaWeb.syntax.WM_elements m))) in
       let bs (b : bool) := if b then "ok"%bs else "rejected"%bs in
-      let ar_c n := let La := LambdaWeb.ar_impl.ar_analyze_n n ed in
-                    (nw La ++ " " ++ bs (andb (LambdaWeb.ar_impl.La_ok La) (LambdaWeb.ar_impl.ar_ok La (M.empty _) ed)))%bs in
       let cp_c n := let Lc := LambdaWeb.cp_impl.analyze_n n e1 in
                     (nw Lc ++ " " ++ bs (LambdaWeb.cp_impl.cp_ok Lc (M.empty _) e1))%bs in
+      let why := let La := snd (LambdaWeb.ar_impl.ar_choose ed) in
+                 let get w i := match LambdaWeb.syntax.WM.get w La with
+                                | Some ps => nth i ps LambdaWeb.ar.Plain | None => LambdaWeb.ar.Plain end in
+                 let usable s := match LambdaWeb.ar_impl.usable (Some s) with Some _ => true | None => false end in
+                 let cls w i := match get w i with
+                                | LambdaWeb.ar.Plain => 4%nat
+                                | LambdaWeb.ar.Known None => 7%nat
+                                | LambdaWeb.ar.Known (Some s) => if usable s then 9%nat else 8%nat
+                                | LambdaWeb.ar.Flat _ => 10%nat end in
+                 let sel w i := match get w i with
+                                | LambdaWeb.ar.Known (Some s) => usable s
+                                | _ => false end in
+                 String.concat " " (map (fun n => show_N (N.of_nat n)) (LambdaWeb.fixpoint.why_hist ed cls sel 10)) in
       let ar_f := match LambdaWeb.ar_impl.ar_fix ed with
-                  | La :: _ => (nw La ++ " " ++ bs (andb (LambdaWeb.ar_impl.La_ok La) (LambdaWeb.ar_impl.ar_ok La (M.empty _) ed)))%bs
+                  | (F, La) :: _ => (nw La ++ " " ++ bs (andb (LambdaWeb.ar_impl.La_ok La) (LambdaWeb.ar_impl.ar_ok F La (M.empty _) ed)))%bs
                   | [] => "no solution"%bs end in
       let cp_f := match LambdaWeb.cp_impl.cp_fix e1 with
                   | Lc :: _ => (nw Lc ++ " " ++ bs (LambdaWeb.cp_impl.cp_ok Lc (M.empty _) e1))%bs
@@ -278,12 +296,12 @@ Section IDENT.
                              (LambdaWeb.stats.stats_of ew) ++
                   "; defunc: " ++ dmsg ++ ", new constructors " ++ show_N ndfn ++
                   "; arity raising: webs " ++ nw La ++
-                  ", flattened positions " ++ show_N nflat ++
+                  ", flattened positions " ++ show_N nflat ++ ", known positions " ++ show_N nknown ++ " (shaped " ++ show_N nshaped ++ ", flattenable but escaping " ++ show_N nesc ++ ")" ++
                   ", parameters " ++ show_N (LambdaWeb.stats.n_param (LambdaWeb.stats.stats_of ed)) ++ " -> " ++
                   show_N (LambdaWeb.stats.n_param (LambdaWeb.stats.stats_of ea)) ++
                   ", arguments " ++ show_N (LambdaWeb.stats.n_arg (LambdaWeb.stats.stats_of ed)) ++ " -> " ++
                   show_N (LambdaWeb.stats.n_arg (LambdaWeb.stats.stats_of ea)) ++
-                  " [PASSES] AR fixpoint: " ++ ar_f ++ ", candidates by round 1/2/3: " ++ ar_c 1%nat ++ ", " ++ ar_c 2%nat ++ ", " ++ ar_c 3%nat ++
+                  " [PASSES] AR fixpoint: " ++ ar_f ++ ", escape reasons (constr prim halt plain untracked called known-unshaped known-unflattenable known-flattenable flat): " ++ why ++
                   "; AR " ++ pp sd sa ++ "; DPE fixpoint: " ++ dpe_f ++ "; DPE " ++ pp sa s1 ++
                   "; CP fixpoint: " ++ cp_f ++ ", candidates by round 1/2/3: " ++ cp_c 1%nat ++ ", " ++ cp_c 2%nat ++ ", " ++ cp_c 3%nat ++
                   "; CP " ++ pp s1 sw)%bs in

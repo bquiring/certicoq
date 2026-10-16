@@ -2,20 +2,21 @@
    relation of ar.v.
 
    - The transformation [ar] follows the relation: it tracks the scoped
-     environment of the known shapes, projects the fields of the flattened
-     arguments of the calls of the webs in the map into fresh variables, and
-     rebuilds the flattened parameters on entry.  Fresh names come from a
-     counter that starts above every variable of the program.
+     environment of the known variables (a constructor is known if its
+     fields match the field table, a projection if it projects a field of
+     known shape from a known variable), projects the fields of the
+     flattened arguments of the calls of the webs in the map into fresh
+     variables, and rebuilds the flattened parameters on entry.  Fresh names
+     come from a counter that starts above every variable of the program.
    - The checker [ar_ok] checks the side conditions of the relation (every
-     flattened argument has a known shape; the transformed functions have
-     distinct parameters and the right arity), and [La_ok] that the map only
-     flattens internal constructors with fields.  They are proven sound.
-   - The analysis [ar_analyze] computes, for every internal web, the shapes
-     passed at each position by all the calls of the web.  Flattened
-     parameters of the enclosing functions have known shapes, so the analysis
-     is iterated; it is not proven correct: the top level uses the most
-     precise result that the checkers accept, and otherwise transforms no
-     web. *)
+     argument at a known position is known, of the position's shape; the
+     transformed functions have distinct parameters and the right arity),
+     and [La_ok] that the map only flattens internal constructors with
+     fields.  They are proven sound.
+   - The analysis [ar_fix] computes the field table and the positions from
+     the constraint analyses of fixpoint.v; it is not proven correct: the
+     top level uses its result only if the checkers accept it, and
+     otherwise transforms no web. *)
 
 From Stdlib Require Import NArith.BinNat ZArith.ZArith Lists.List Sets.Ensembles Bool
      micromega.Lia Relations.Relations.
@@ -100,38 +101,105 @@ Fixpoint fresh_for (ss : list (option shape)) (c : positive) : list (list var) *
 
 (** * The transformation and its checker *)
 
-Fixpoint shape_okb (K : M.t shape) (ys : list var) (ss : list (option shape)) : bool :=
-  match ys, ss with
-  | y :: ys', Some s :: ss' =>
-      match K ! y, s with
-      | Some (w', n', c'), (w, n, c) => web_eqb w' w && Nat.eqb n' n && Pos.eqb c' c
-      | None, _ => false
-      end && shape_okb K ys' ss'
-  | _ :: ys', None :: ss' => shape_okb K ys' ss'
+Definition shape_eqb (s1 s2 : shape) : bool :=
+  let '(w1, n1, c1) := s1 in let '(w2, n2, c2) := s2 in web_eqb w1 w2 && Nat.eqb n1 n2 && Pos.eqb c1 c2.
+
+Lemma shape_eqb_eq s1 s2 : shape_eqb s1 s2 = true -> s1 = s2.
+Proof.
+  destruct s1 as [[w1 n1] c1], s2 as [[w2 n2] c2]. simpl. intros H.
+  apply andb_true_iff in H as [H1 H3]. apply andb_true_iff in H1 as [H1 H2].
+  apply web_eqb_eq in H1. apply Nat.eqb_eq in H2. apply Pos.eqb_eq in H3. subst. reflexivity.
+Qed.
+
+(** [K ! y = Some (Some s)] *)
+Definition has_shape (K : kenv) (y : var) (s : shape) : bool :=
+  match K ! y with Some (Some s') => shape_eqb s' s | _ => false end.
+
+Lemma has_shape_spec K y s : has_shape K y s = true -> K ! y = Some (Some s).
+Proof.
+  unfold has_shape. destruct (K ! y) as [[s' |] |]; try discriminate.
+  intros H. apply shape_eqb_eq in H. subst. reflexivity.
+Qed.
+
+Definition known_okb (K : kenv) (y : var) (p : pos) : bool :=
+  match pknown p with
+  | None => true
+  | Some None => match K ! y with Some _ => true | None => false end
+  | Some (Some s) => has_shape K y s
+  end.
+
+Fixpoint shape_okb (K : kenv) (ys : list var) (ps : list pos) : bool :=
+  match ys, ps with
+  | y :: ys', p :: ps' => known_okb K y p && shape_okb K ys' ps'
   | _, _ => true
   end.
 
-Lemma shape_okb_spec K ys ss : shape_okb K ys ss = true -> shape_ok K ys ss.
+Lemma shape_okb_spec K ys ps : shape_okb K ys ps = true -> shape_ok K ys ps.
 Proof.
-  revert ss; induction ys as [| y ys IH]; intros [| [[[w n] c] |] ss] H; simpl in *; eauto.
-  destruct (K ! y) as [[[w' n'] c'] |]; [| discriminate ].
-  apply andb_true_iff in H as [H1 H2]. apply andb_true_iff in H1 as [H1 H3].
-  apply andb_true_iff in H1 as [H1 H4].
-  apply web_eqb_eq in H1. apply Nat.eqb_eq in H4. apply Pos.eqb_eq in H3. subst. split; eauto.
+  revert ps; induction ys as [| y ys IH]; intros [| p ps] H; simpl in *; eauto.
+  apply andb_true_iff in H as [H1 H2]. split; eauto.
+  unfold known_okb, known_ok in *. destruct (pknown p) as [[s |] |]; auto.
+  - apply has_shape_spec. exact H1.
+  - destruct (K ! y); congruence.
 Qed.
+
+(** The fields of a constructor match the table *)
+Fixpoint fields_okb (K : kenv) (ys : list var) (fs : list (option shape)) : bool :=
+  match fs, ys with
+  | [], _ => true
+  | None :: fs', [] => fields_okb K [] fs'
+  | Some _ :: _, [] => false
+  | None :: fs', _ :: ys' => fields_okb K ys' fs'
+  | Some s :: fs', y :: ys' => has_shape K y s && fields_okb K ys' fs'
+  end.
+
+Lemma fields_okb_spec K ys fs : fields_okb K ys fs = true -> fields_ok K ys fs.
+Proof.
+  revert ys. induction fs as [| o fs IH]; intros ys H i s Hi; [ destruct i; discriminate |].
+  destruct o as [s' |], ys as [| y ys]; simpl in H; try discriminate.
+  - apply andb_true_iff in H as [H1 H2]. destruct i as [| i]; simpl in Hi.
+    + inv Hi. exists y. split; [ reflexivity | apply has_shape_spec; exact H1 ].
+    + destruct (IH ys H2 i s Hi) as (y' & Hy' & Hk). exists y'. auto.
+  - destruct i as [| i]; simpl in Hi; [ discriminate |].
+    destruct (IH [] H i s Hi) as (y' & Hy' & _). destruct i; discriminate.
+  - destruct i as [| i]; simpl in Hi; [ discriminate |].
+    destruct (IH ys H i s Hi) as (y' & Hy' & Hk). exists y'. auto.
+Qed.
+
+(** The field shape of a projection, if the projected variable is known *)
+Definition proj_known (F : ftable) (K : kenv) (w : web) (t : ctor_tag) (n : N) (y : var) : option shape :=
+  match K ! y, nth_error (F w t) (N.to_nat n) with
+  | Some _, Some (Some s) => Some s
+  | _, _ => None
+  end.
+
+Lemma proj_known_spec F K w t n y s :
+  proj_known F K w t n y = Some s -> K ! y <> None /\ nth_error (F w t) (N.to_nat n) = Some (Some s).
+Proof.
+  unfold proj_known. destruct (K ! y); [| discriminate ].
+  destruct (nth_error (F w t) (N.to_nat n)) as [[s' |] |]; try discriminate.
+  intros H; inv H. split; congruence.
+Qed.
+
+(** The environment after a binding *)
+Definition kconstr (F : ftable) (K : kenv) (x : var) (w : web) (t : ctor_tag) (ys : list var) : kenv :=
+  if fields_okb K ys (F w t) then M.set x (Some (w, length ys, t)) K else M.remove x K.
+
+Definition kproj (F : ftable) (K : kenv) (x : var) (w : web) (t : ctor_tag) (n : N) (y : var) : kenv :=
+  match proj_known F K w t n y with Some s => M.set x (Some s) K | None => M.remove x K end.
 
 Section Transform.
 
-  Variable (La : WM.t (list (option shape))).
+  Variables (F : ftable) (La : WM.t (list pos)).
 
-  Definition ar_ss (w : web) : list (option shape) :=
-    match WM.get w La with Some ss => ss | None => [] end.
+  Definition ar_ps (w : web) : list pos :=
+    match WM.get w La with Some ps => ps | None => [] end.
 
-  Fixpoint ar (K : M.t shape) (e : exp) (c : positive) : exp * positive :=
+  Fixpoint ar (K : kenv) (e : exp) (c : positive) : exp * positive :=
     match e with
     | Econstr x w t ys k =>
-        let '(k', c) := ar (M.set x (w, length ys, t) K) k c in (Econstr x w t ys k', c)
-    | Eproj x w t n y k => let '(k', c) := ar (M.remove x K) k c in (Eproj x w t n y k', c)
+        let '(k', c) := ar (kconstr F K x w t ys) k c in (Econstr x w t ys k', c)
+    | Eproj x w t n y k => let '(k', c) := ar (kproj F K x w t n y) k c in (Eproj x w t n y k', c)
     | Ecase x w cl =>
         let '(cl', c) :=
           (fix ar_br (cl : list (ctor_tag * exp)) (c : positive) :=
@@ -147,7 +215,7 @@ Section Transform.
         if keeps (sel_L La) w then
           let '(k', c) := ar (M.remove x K) k c in (Eletapp x f w ys k', c)
         else
-          let ss := ar_ss w in
+          let ss := map pshape (ar_ps w) in
           let '(zss, c) := fresh_for ss c in
           let '(k', c) := ar (M.remove x K) k c in
           (proj_args ys ss zss (Eletapp x f w (flat_vars ys ss zss) k'), c)
@@ -159,14 +227,14 @@ Section Transform.
     | Eapp f w ys =>
         if keeps (sel_L La) w then (Eapp f w ys, c)
         else
-          let ss := ar_ss w in
+          let ss := map pshape (ar_ps w) in
           let '(zss, c) := fresh_for ss c in
           (proj_args ys ss zss (Eapp f w (flat_vars ys ss zss)), c)
     | Eprim_val x p k => let '(k', c) := ar (M.remove x K) k c in (Eprim_val x p k', c)
     | Eprim x p ys k => let '(k', c) := ar (M.remove x K) k c in (Eprim x p ys k', c)
     | Ehalt x => (Ehalt x, c)
     end
-  with ar_fd (K : M.t shape) (B : fundefs) (c : positive) : fundefs * positive :=
+  with ar_fd (K : kenv) (B : fundefs) (c : positive) : fundefs * positive :=
     match B with
     | Fcons f w xs e B =>
         if keeps (sel_L La) w then
@@ -174,18 +242,18 @@ Section Transform.
           let '(B', c) := ar_fd K B c in
           (Fcons f w xs e' B', c)
         else
-          let ss := ar_ss w in
+          let ss := map pshape (ar_ps w) in
           let '(yss, c) := fresh_for ss c in
-          let '(e', c) := ar (param_shapes xs ss K) e c in
+          let '(e', c) := ar (param_shapes xs (ar_ps w) K) e c in
           let '(B', c) := ar_fd K B c in
           (Fcons f w (flat_vars xs ss yss) (rebuild xs ss yss e') B', c)
     | Fnil => (Fnil, c)
     end.
 
-  Fixpoint ar_ok (K : M.t shape) (e : exp) : bool :=
+  Fixpoint ar_ok (K : kenv) (e : exp) : bool :=
     match e with
-    | Econstr x w t ys k => ar_ok (M.set x (w, length ys, t) K) k
-    | Eproj x w t n y k => ar_ok (M.remove x K) k
+    | Econstr x w t ys k => ar_ok (kconstr F K x w t ys) k
+    | Eproj x w t n y k => ar_ok (kproj F K x w t n y) k
     | Ecase x w cl =>
         (fix go (cl : list (ctor_tag * exp)) :=
            match cl with
@@ -194,20 +262,20 @@ Section Transform.
            end) cl
     | Eletapp x f w ys k =>
         (keeps (sel_L La) w ||
-         (Nat.eqb (length ys) (length (ar_ss w)) && shape_okb K ys (ar_ss w))) &&
+         (Nat.eqb (length ys) (length (ar_ps w)) && shape_okb K ys (ar_ps w))) &&
         ar_ok (M.remove x K) k
     | Efun B k => ar_ok_fd (remove_names B K) B && ar_ok (remove_names B K) k
     | Eapp f w ys =>
-        keeps (sel_L La) w || (Nat.eqb (length ys) (length (ar_ss w)) && shape_okb K ys (ar_ss w))
+        keeps (sel_L La) w || (Nat.eqb (length ys) (length (ar_ps w)) && shape_okb K ys (ar_ps w))
     | Eprim_val x _ k | Eprim x _ _ k => ar_ok (M.remove x K) k
     | Ehalt _ => true
     end
-  with ar_ok_fd (K : M.t shape) (B : fundefs) : bool :=
+  with ar_ok_fd (K : kenv) (B : fundefs) : bool :=
     match B with
     | Fcons f w xs e B =>
         (if keeps (sel_L La) w then ar_ok (param_shapes xs [] K) e
-         else Nat.eqb (length (ar_ss w)) (length xs) && nodupb xs &&
-              ar_ok (param_shapes xs (ar_ss w) K) e) && ar_ok_fd K B
+         else Nat.eqb (length (ar_ps w)) (length xs) && nodupb xs &&
+              ar_ok (param_shapes xs (ar_ps w) K) e) && ar_ok_fd K B
     | Fnil => true
     end.
 
@@ -215,7 +283,7 @@ Section Transform.
   Definition info_okb (s : option shape) : bool :=
     match s with Some (wc, n, _) => negb (exposedb wc) && Nat.ltb 0 n | None => true end.
 
-  Definition La_ok : bool := forallb (fun '(_, ss) => forallb info_okb ss) (WM_elements La).
+  Definition La_ok : bool := forallb (fun '(_, ps) => forallb info_okb (map pshape ps)) (WM_elements La).
 
 End Transform.
 
@@ -336,7 +404,8 @@ Qed.
 
 (** * The checker is sound *)
 
-Lemma La_ok_spec La w ss : La_ok La = true -> WM.get w La = Some ss -> Forall info_ok ss /\ Forall pos_ok ss.
+Lemma La_ok_spec La w ps : La_ok La = true -> WM.get w La = Some ps ->
+  Forall info_ok (map pshape ps) /\ Forall pos_ok (map pshape ps).
 Proof.
   intros H Hw. eapply WM_elements_correct in Hw. unfold La_ok in H.
   eapply forallb_forall in H; [| exact Hw ]. simpl in H.
@@ -345,63 +414,69 @@ Proof.
     apply andb_true_iff in H as [H1 H2]; [ apply negb_true_iff in H1; exact H1 | apply Nat.ltb_lt in H2; exact H2 ].
 Qed.
 
-Lemma ar_ss_sel La w : keeps (sel_L La) w = false -> exposedb w = false /\ WM.get w La = Some (ar_ss La w).
+Lemma ar_ps_sel La w : keeps (sel_L La) w = false -> exposedb w = false /\ WM.get w La = Some (ar_ps La w).
 Proof.
   intros H. apply keeps_internal in H. destruct H as [Hw Hs]. split; [ eassumption |].
-  unfold sel_L, ar_ss in *. destruct (WM.get w La); congruence.
+  unfold sel_L, ar_ps in *. destruct (WM.get w La); congruence.
 Qed.
 
 Section Sound.
 
-  Variables (La : WM.t (list (option shape))) (m : var).
+  Variables (F : ftable) (La : WM.t (list pos)) (m : var).
   Hypothesis (HLa : La_ok La = true).
 
   Lemma fresh_disjoint_fv zss c e e' K :
     (forall z, List.In z (concat zss) -> (c <= z)%positive) -> (m < c)%positive -> vle m e ->
-    trans La K e e' -> forall S, Disjoint _ (FromList (concat zss)) (occurs_free e' \\ S).
+    trans F La K e e' -> forall S, Disjoint _ (FromList (concat zss)) (occurs_free e' \\ S).
   Proof.
     intros Hz Hc Hv Ht S. constructor. intros z Hin. inv Hin. destruct H0 as [H0 _].
-    eapply (proj1 (trans_occurs_free La)) in H0; [| eassumption ].
+    eapply (proj1 (trans_occurs_free F La)) in H0; [| eassumption ].
     eapply (proj1 (vle_fv m)) in H0; [| eassumption ]. specialize (Hz _ H). lia.
   Qed.
 
   Lemma ar_trans :
-    (forall e K c, ar_ok La K e = true -> vle m e -> (m < c)%positive ->
-                   trans La K e (fst (ar La K e c)) /\ (c <= snd (ar La K e c))%positive) /\
-    (forall B K c, ar_ok_fd La K B = true -> vle_fd m B -> (m < c)%positive ->
-                   trans_fundefs La K B (fst (ar_fd La K B c)) /\ (c <= snd (ar_fd La K B c))%positive).
+    (forall e K c, ar_ok F La K e = true -> vle m e -> (m < c)%positive ->
+                   trans F La K e (fst (ar F La K e c)) /\ (c <= snd (ar F La K e c))%positive) /\
+    (forall B K c, ar_ok_fd F La K B = true -> vle_fd m B -> (m < c)%positive ->
+                   trans_fundefs F La K B (fst (ar_fd F La K B c)) /\ (c <= snd (ar_fd F La K B c))%positive).
   Proof.
     eapply exp_fundefs_ind.
     - (* Econstr *)
       intros x w t ys e IH K c Hok Hv Hlt. simpl in *. destruct Hv as (Hx & Hys & He).
-      specialize (IH _ c Hok He Hlt). destruct (ar La _ e c) as [e' c'] eqn:Hk. simpl in *.
-      destruct IH as [Ht Hc]. split; [ constructor; exact Ht | exact Hc ].
+      specialize (IH _ c Hok He Hlt). destruct (ar F La _ e c) as [e' c'] eqn:Hk. simpl in *.
+      destruct IH as [Ht Hc]. split; [| exact Hc ].
+      unfold kconstr in Ht. destruct (fields_okb K ys (F w t)) eqn:Hf.
+      + eapply Trans_constr; [ apply fields_okb_spec; exact Hf | exact Ht ].
+      + eapply Trans_constr_unknown; exact Ht.
     - (* Ecase [] *)
       intros. simpl. split; [ constructor | lia ].
     - (* Ecase (_ :: _) *)
       intros x w cl t e IHe IHcl K c Hok Hv Hlt. simpl in Hok, Hv. apply andb_true_iff in Hok as [Hoke Hokcl].
       destruct Hv as (Hx & He & Hcl).
       specialize (IHe _ c Hoke He Hlt). simpl.
-      destruct (ar La K e c) as [e' c1] eqn:Hk. simpl in IHe. destruct IHe as [Hte Hc1].
+      destruct (ar F La K e c) as [e' c1] eqn:Hk. simpl in IHe. destruct IHe as [Hte Hc1].
       specialize (IHcl K c1 Hokcl (conj Hx Hcl) ltac:(lia)). simpl in IHcl.
       match goal with |- context [ ?F cl c1 ] => destruct (F cl c1) as [cl' c2] eqn:Hcl' end.
       simpl in *. destruct IHcl as [Htcl Hc2]. split; [ constructor; eauto | lia ].
     - (* Eproj *)
       intros x w t n y e IH K c Hok Hv Hlt. simpl in *. destruct Hv as (Hx & Hy & He).
-      specialize (IH _ c Hok He Hlt). destruct (ar La _ e c) as [e' c'] eqn:Hk. simpl in *.
-      destruct IH as [Ht Hc]. split; [ constructor; exact Ht | exact Hc ].
+      specialize (IH _ c Hok He Hlt). destruct (ar F La _ e c) as [e' c'] eqn:Hk. simpl in *.
+      destruct IH as [Ht Hc]. split; [| exact Hc ].
+      unfold kproj in Ht. destruct (proj_known F K w t n y) as [s |] eqn:Hp.
+      + apply proj_known_spec in Hp as [Hp1 Hp2]. eapply Trans_proj_known; eassumption.
+      + eapply Trans_proj; exact Ht.
     - (* Eletapp *)
       intros x f w ys e IH K c Hok Hv Hlt. simpl in *. destruct Hv as (Hx & Hf & Hys & He).
       apply andb_true_iff in Hok as [Hcall Hok].
       destruct (keeps (sel_L La) w) eqn:Hkeep.
-      + specialize (IH _ c Hok He Hlt). destruct (ar La _ e c) as [e' c'] eqn:Hk. simpl in *.
+      + specialize (IH _ c Hok He Hlt). destruct (ar F La _ e c) as [e' c'] eqn:Hk. simpl in *.
         destruct IH as [Ht Hc]. split; [ constructor; eauto | exact Hc ].
-      + destruct (ar_ss_sel La w Hkeep) as [Hw HL]. simpl in Hcall.
+      + destruct (ar_ps_sel La w Hkeep) as [Hw HL]. simpl in Hcall.
         apply andb_true_iff in Hcall as [Hlen Hsh]. apply Nat.eqb_eq in Hlen.
         destruct (La_ok_spec La w _ HLa HL) as [Hinfo Hpos].
-        destruct (fresh_for_spec (ar_ss La w) c) as (Hf1 & Hf2 & Hf3 & Hf4).
-        destruct (fresh_for (ar_ss La w) c) as [zss c1] eqn:Hfr. simpl in *.
-        specialize (IH _ c1 Hok He ltac:(lia)). destruct (ar La _ e c1) as [e' c2] eqn:Hk. simpl in *.
+        destruct (fresh_for_spec (map pshape (ar_ps La w)) c) as (Hf1 & Hf2 & Hf3 & Hf4).
+        destruct (fresh_for (map pshape (ar_ps La w)) c) as [zss c1] eqn:Hfr. simpl in *.
+        specialize (IH _ c1 Hok He ltac:(lia)). destruct (ar F La _ e c1) as [e' c2] eqn:Hk. simpl in *.
         destruct IH as [Ht Hc]. split; [| lia ].
         econstructor; eauto using shape_okb_spec.
         * constructor. intros z Hin. inv Hin. destruct (Hf3 _ H) as [Hz _].
@@ -410,55 +485,55 @@ Section Sound.
     - (* Efun *)
       intros B e IHB IHe K c Hok Hv Hlt. simpl in *. destruct Hv as (HB & He).
       apply andb_true_iff in Hok as [HokB Hoke].
-      specialize (IHB _ c HokB HB Hlt). destruct (ar_fd La _ B c) as [B' c1] eqn:HkB. simpl in *.
+      specialize (IHB _ c HokB HB Hlt). destruct (ar_fd F La _ B c) as [B' c1] eqn:HkB. simpl in *.
       destruct IHB as [HtB Hc1].
-      specialize (IHe _ c1 Hoke He ltac:(lia)). destruct (ar La _ e c1) as [e' c2] eqn:Hk. simpl in *.
+      specialize (IHe _ c1 Hoke He ltac:(lia)). destruct (ar F La _ e c1) as [e' c2] eqn:Hk. simpl in *.
       destruct IHe as [Hte Hc2]. split; [ constructor; eauto | lia ].
     - (* Eapp *)
       intros f w ys K c Hok Hv Hlt. simpl in *. destruct Hv as (Hf & Hys).
       destruct (keeps (sel_L La) w) eqn:Hkeep.
       + simpl. split; [ constructor; eauto | lia ].
-      + destruct (ar_ss_sel La w Hkeep) as [Hw HL]. simpl in Hok.
+      + destruct (ar_ps_sel La w Hkeep) as [Hw HL]. simpl in Hok.
         apply andb_true_iff in Hok as [Hlen Hsh]. apply Nat.eqb_eq in Hlen.
         destruct (La_ok_spec La w _ HLa HL) as [Hinfo Hpos].
-        destruct (fresh_for_spec (ar_ss La w) c) as (Hf1 & Hf2 & Hf3 & Hf4).
-        destruct (fresh_for (ar_ss La w) c) as [zss c1] eqn:Hfr. simpl in *.
+        destruct (fresh_for_spec (map pshape (ar_ps La w)) c) as (Hf1 & Hf2 & Hf3 & Hf4).
+        destruct (fresh_for (map pshape (ar_ps La w)) c) as [zss c1] eqn:Hfr. simpl in *.
         split; [| lia ].
         econstructor; eauto using shape_okb_spec.
         constructor. intros z Hin. inv Hin. destruct (Hf3 _ H) as [Hz _].
         inv H0; [ inv H1; lia |]. eapply Forall_le_In in H1; [| exact Hys ]. lia.
     - (* Eprim_val *)
       intros x p e IH K c Hok Hv Hlt. simpl in *. destruct Hv as (Hx & He).
-      specialize (IH _ c Hok He Hlt). destruct (ar La _ e c) as [e' c'] eqn:Hk. simpl in *.
+      specialize (IH _ c Hok He Hlt). destruct (ar F La _ e c) as [e' c'] eqn:Hk. simpl in *.
       destruct IH as [Ht Hc]. split; [ constructor; exact Ht | exact Hc ].
     - (* Eprim *)
       intros x p ys e IH K c Hok Hv Hlt. simpl in *. destruct Hv as (Hx & Hys & He).
-      specialize (IH _ c Hok He Hlt). destruct (ar La _ e c) as [e' c'] eqn:Hk. simpl in *.
+      specialize (IH _ c Hok He Hlt). destruct (ar F La _ e c) as [e' c'] eqn:Hk. simpl in *.
       destruct IH as [Ht Hc]. split; [ constructor; exact Ht | exact Hc ].
     - (* Ehalt *) intros. simpl. split; [ constructor | lia ].
     - (* Fcons *)
       intros f w xs e B IHe IHB K c Hok Hv Hlt. simpl in *. destruct Hv as (Hfm & Hxs & He & HB).
       apply andb_true_iff in Hok as [Hokf HokB].
       destruct (keeps (sel_L La) w) eqn:Hkeep.
-      + specialize (IHe _ c Hokf He Hlt). destruct (ar La _ e c) as [e' c1] eqn:Hk. simpl in *.
+      + specialize (IHe _ c Hokf He Hlt). destruct (ar F La _ e c) as [e' c1] eqn:Hk. simpl in *.
         destruct IHe as [Hte Hc1].
-        specialize (IHB K c1 HokB HB ltac:(lia)). destruct (ar_fd La K B c1) as [B' c2] eqn:HkB. simpl in *.
+        specialize (IHB K c1 HokB HB ltac:(lia)). destruct (ar_fd F La K B c1) as [B' c2] eqn:HkB. simpl in *.
         destruct IHB as [HtB Hc2]. split; [ constructor; eauto | lia ].
-      + destruct (ar_ss_sel La w Hkeep) as [Hw HL].
+      + destruct (ar_ps_sel La w Hkeep) as [Hw HL].
         apply andb_true_iff in Hokf as [Hokf Hoke]. apply andb_true_iff in Hokf as [Hlen Hnd].
         apply Nat.eqb_eq in Hlen.
         destruct (La_ok_spec La w _ HLa HL) as [Hinfo Hpos].
-        destruct (fresh_for_spec (ar_ss La w) c) as (Hf1 & Hf2 & Hf3 & Hf4).
-        destruct (fresh_for (ar_ss La w) c) as [yss c1] eqn:Hfr. simpl in *.
-        specialize (IHe _ c1 Hoke He ltac:(lia)). destruct (ar La _ e c1) as [e' c2] eqn:Hk. simpl in *.
+        destruct (fresh_for_spec (map pshape (ar_ps La w)) c) as (Hf1 & Hf2 & Hf3 & Hf4).
+        destruct (fresh_for (map pshape (ar_ps La w)) c) as [yss c1] eqn:Hfr. simpl in *.
+        specialize (IHe _ c1 Hoke He ltac:(lia)). destruct (ar F La _ e c1) as [e' c2] eqn:Hk. simpl in *.
         destruct IHe as [Hte Hc2].
-        specialize (IHB K c2 HokB HB ltac:(lia)). destruct (ar_fd La K B c2) as [B' c3] eqn:HkB. simpl in *.
+        specialize (IHB K c2 HokB HB ltac:(lia)). destruct (ar_fd F La K B c2) as [B' c3] eqn:HkB. simpl in *.
         destruct IHB as [HtB Hc3]. split; [| lia ].
         econstructor; eauto.
         * eapply NoDup_app_intro; [ eapply nodupb_spec; eassumption | eassumption |].
           intros z Hz Hc'. destruct (Hf3 _ Hc') as [Hz' _]. eapply Forall_le_In in Hz; [| exact Hxs ]. lia.
         * constructor. intros z Hin. inv Hin. destruct (Hf3 _ H) as [Hz _].
-          eapply (proj1 (trans_occurs_free La)) in H0; [| eassumption ].
+          eapply (proj1 (trans_occurs_free F La)) in H0; [| eassumption ].
           eapply (proj1 (vle_fv m)) in H0; [| eassumption ]. lia.
     - (* Fnil *) intros. simpl. split; [ constructor | lia ].
   Qed.
@@ -466,10 +541,10 @@ Section Sound.
 End Sound.
 
 (** With no selected web, the checkers always succeed. *)
-Lemma ar_ok_empty :
-  (forall e K, ar_ok (WM.empty _) K e = true) /\ (forall B K, ar_ok_fd (WM.empty _) K B = true).
+Lemma ar_ok_empty F :
+  (forall e K, ar_ok F (WM.empty _) K e = true) /\ (forall B K, ar_ok_fd F (WM.empty _) K B = true).
 Proof.
-  assert (Hk : forall w, keeps (sel_L (WM.empty (list (option shape)))) w = true).
+  assert (Hk : forall w, keeps (sel_L (WM.empty (list pos))) w = true).
   { intros w. unfold keeps, sel_L. rewrite WM.gempty. apply orb_true_r. }
   eapply exp_fundefs_ind; simpl; intros; rewrite ?Hk; simpl;
     repeat match goal with
@@ -477,7 +552,7 @@ Proof.
            end; eauto.
 Qed.
 
-Lemma La_ok_empty : La_ok (WM.empty (list (option shape))) = true.
+Lemma La_ok_empty : La_ok (WM.empty (list pos)) = true.
 Proof.
   unfold La_ok. eapply forallb_forall. intros [w ss] Hin.
   unfold WM_elements in Hin. apply in_map_iff in Hin as ([p a] & _ & Hin).
@@ -486,21 +561,6 @@ Qed.
 
 (** * The analysis *)
 
-Definition shape_eqb (s1 s2 : shape) : bool :=
-  let '(w1, n1, c1) := s1 in let '(w2, n2, c2) := s2 in web_eqb w1 w2 && Nat.eqb n1 n2 && Pos.eqb c1 c2.
-
-Definition meet_sh (a b : option shape) : option shape :=
-  match a, b with
-  | Some s, Some s' => if shape_eqb s s' then Some s else None
-  | _, _ => None
-  end.
-
-Fixpoint meet_shs (l1 l2 : list (option shape)) : list (option shape) :=
-  match l1, l2 with
-  | a :: l1, b :: l2 => meet_sh a b :: meet_shs l1 l2
-  | _, _ => []
-  end.
-
 (** Only internal constructors with fields are flattened *)
 Definition usable (s : option shape) : option shape :=
   match s with
@@ -508,123 +568,92 @@ Definition usable (s : option shape) : option shape :=
   | None => None
   end.
 
-Definition add_call_sh (w : web) (info : list (option shape)) (tbl : WM.t (option (list (option shape)))) :=
-  match WM.get w tbl with
-  | None => WM.set w (Some info) tbl
-  | Some None => tbl
-  | Some (Some info') =>
-      if Nat.eqb (length info') (length info) then WM.set w (Some (meet_shs info' info)) tbl
-      else WM.set w None tbl
+Definition sh (v : fixpoint.cval) : option shape :=
+  match v with fixpoint.CCon wc c n => Some (wc, n, c) | _ => None end.
+
+(** The largest number of fields of a constructor of the program *)
+Fixpoint max_fields (e : exp) (acc : nat) : nat :=
+  match e with
+  | Econstr _ _ _ ys k => max_fields k (Nat.max (length ys) acc)
+  | Eproj _ _ _ _ _ k | Eletapp _ _ _ _ k | Eprim_val _ _ k | Eprim _ _ _ k => max_fields k acc
+  | Ecase _ _ cl =>
+      (fix go (cl : list (ctor_tag * exp)) acc :=
+         match cl with
+         | [] => acc
+         | (_, e) :: cl => go cl (max_fields e acc)
+         end) cl acc
+  | Efun B k => max_fields k (max_fields_fd B acc)
+  | Eapp _ _ _ | Ehalt _ => acc
+  end
+with max_fields_fd (B : fundefs) (acc : nat) : nat :=
+  match B with
+  | Fcons _ _ _ e B => max_fields_fd B (max_fields e acc)
+  | Fnil => acc
   end.
 
-Section Analysis.
-
-  (** The shapes of the previous round, for the parameters *)
-  Variable (Lprev : WM.t (list (option shape))).
-
-  Definition prev_ss (w : web) : list (option shape) :=
-    if exposedb w then [] else match WM.get w Lprev with Some ss => ss | None => [] end.
-
-  Definition atables : Type := (WM.t (option (list (option shape))) * WM.t (option nat))%type.
-
-  Fixpoint collect_ar (K : M.t shape) (e : exp) (t : atables) : atables :=
-    match e with
-    | Econstr x w c ys k => collect_ar (M.set x (w, length ys, c) K) k t
-    | Eproj x _ _ _ _ k => collect_ar (M.remove x K) k t
-    | Ecase _ _ cl =>
-        (fix go (cl : list (ctor_tag * exp)) t :=
-           match cl with
-           | [] => t
-           | (_, e) :: cl => go cl (collect_ar K e t)
-           end) cl t
-    | Eletapp x f w ys k =>
-        let t := if exposedb w then t else (add_call_sh w (map (fun y => usable (K ! y)) ys) (fst t), snd t) in
-        collect_ar (M.remove x K) k t
-    | Efun B k => collect_ar (remove_names B K) k (collect_ar_fd (remove_names B K) B t)
-    | Eapp f w ys => if exposedb w then t else (add_call_sh w (map (fun y => usable (K ! y)) ys) (fst t), snd t)
-    | Eprim_val x _ k | Eprim x _ _ k => collect_ar (M.remove x K) k t
-    | Ehalt _ => t
-    end
-  with collect_ar_fd (K : M.t shape) (B : fundefs) (t : atables) : atables :=
-    match B with
-    | Fcons f w xs e B =>
-        let t := if exposedb w then t else (fst t, add_fun w xs (snd t)) in
-        collect_ar_fd K B (collect_ar (param_shapes xs (prev_ss w) K) e t)
-    | Fnil => t
-    end.
-
-  Definition ar_analyze (e : exp) : WM.t (list (option shape)) :=
-    let '(calls, funs) := collect_ar (M.empty _) e (WM.empty _, WM.empty _) in
-    M.map_filter1 (fun o => o)
-      (M.map (fun p (ce : option (list (option shape))) => let w := web_of_index p in
-                match ce, WM.get w funs with
-                | Some ss, Some (Some n) =>
-                    if Nat.eqb n (length ss) && negb (exposedb w) &&
-                       existsb (fun o : option shape => match o with Some _ => true | None => false end) ss
-                    then Some ss else None
-                | _, _ => None
-                end) calls).
-
-End Analysis.
-
-Fixpoint ar_analyze_n (n : nat) (e : exp) : WM.t (list (option shape)) :=
-  match n with
-  | 0 => WM.empty _
-  | S n => ar_analyze (ar_analyze_n n e) e
-  end.
-
-(** The shapes of the known-constructor fixpoint of [fixpoint.v]: a
-    position is flattened if it always receives the same internal
-    constructor with fields, and the record is only projected
-    ([fixpoint.escaping]), so that rebuilding it on entry does not
-    allocate once the projections are resolved *)
-Definition ar_fix (e : exp) : list (WM.t (list (option shape))) :=
-  match fixpoint.param_cons e with
-  | Some P =>
-      let sh (v : fixpoint.cval) : option shape :=
-        match v with fixpoint.CCon wc c n => usable (Some (wc, n, c)) | _ => None end in
+(** The field table and the positions given by the analyses with fields of
+    [fixpoint.v]: every tracked web is in the map; a position is [Plain] if
+    it may receive an unknown variable, [Flat] if it always receives the
+    same internal constructor with fields and the record is only projected
+    ([fixpoint.escaping]), so that rebuilding it on entry does not allocate
+    once the projections are resolved, and [Known] otherwise. *)
+Definition ar_fix (e : exp) : list (ftable * WM.t (list pos)) :=
+  match fixpoint.field_analysis e with
+  | Some (shp, P) =>
       let flat w i := match WM.get w P with
-                      | Some vs => match sh (nth i vs fixpoint.CBot) with Some _ => true | None => false end
+                      | Some vs => match nth i vs (fixpoint.CBot, true) with
+                                   | (v, false) => match usable (sh v) with Some _ => true | None => false end
+                                   | _ => false
+                                   end
                       | None => false
                       end in
       match fixpoint.escaping e flat with
       | Some Esc =>
-          [fold_left (fun La '(w, vs) =>
-                        let es := match WM.get w Esc with Some es => es | None => [] end in
-                        let ss := fixpoint.imap (fun i v => if nth i es true then None else sh v) vs in
-                        if existsb (fun o : option shape => match o with Some _ => true | None => false end) ss
-                        then WM.set w ss La else La) (WM_elements P) (WM.empty _)]
+          let m := max_fields e 0 in
+          let F : ftable := fun w t => map (fun i => sh (shp (fixpoint.kfield w t i))) (seq 0 m) in
+          let pos_of (es : list bool) (i : nat) (vu : fixpoint.cval * bool) : pos :=
+            let '(v, u) := vu in
+            if u then Plain
+            else match sh v with
+                 | Some s => match usable (Some s) with
+                             | Some _ => if nth i es true then Known (Some s) else Flat s
+                             | None => Known (Some s)
+                             end
+                 | None => Known None
+                 end in
+          [(F, fold_left (fun La '(w, vs) =>
+                            let es := match WM.get w Esc with Some es => es | None => [] end in
+                            WM.set w (fixpoint.imap (pos_of es) vs) La) (WM_elements P) (WM.empty _))]
       | None => []
       end
   | None => []
   end.
 
-(** The first map that the checkers accept: the fixpoint, or else the
-    rounds of the local analysis *)
-Definition ar_choose (e : exp) : WM.t (list (option shape)) :=
-  let cands := ar_fix e ++ [ar_analyze_n 3 e; ar_analyze_n 2 e; ar_analyze_n 1 e] in
-  match find (fun La => La_ok La && ar_ok La (M.empty _) e) cands with
-  | Some La => La
-  | None => WM.empty _
+(** The first map that the checkers accept, or no transformed web *)
+Definition ar_choose (e : exp) : ftable * WM.t (list pos) :=
+  match find (fun '(F, La) => La_ok La && ar_ok F La (M.empty _) e) (ar_fix e) with
+  | Some FL => FL
+  | None => (fun _ _ => [], WM.empty _)
   end.
 
-Lemma ar_choose_ok e : La_ok (ar_choose e) = true /\ ar_ok (ar_choose e) (M.empty _) e = true.
+Lemma ar_choose_ok e :
+  La_ok (snd (ar_choose e)) = true /\ ar_ok (fst (ar_choose e)) (snd (ar_choose e)) (M.empty _) e = true.
 Proof.
   unfold ar_choose.
-  destruct (find (fun La => La_ok La && ar_ok La (M.empty _) e) _) eqn:Hf.
-  - eapply find_some in Hf. apply andb_true_iff. apply Hf.
+  destruct (find (fun '(F, La) => La_ok La && ar_ok F La (M.empty _) e) _) as [[F La] |] eqn:Hf.
+  - eapply find_some in Hf. destruct Hf as [_ Hf]. apply andb_true_iff. exact Hf.
   - split; [ eapply La_ok_empty | eapply ar_ok_empty ].
 Qed.
 
 Definition ar_top (e : exp) : exp :=
-  fst (ar (ar_choose e) (M.empty _) e (Pos.succ (maxv e 1%positive))).
+  fst (ar (fst (ar_choose e)) (snd (ar_choose e)) (M.empty _) e (Pos.succ (maxv e 1%positive))).
 
 (** * Correctness of the implementation *)
 
-Theorem ar_top_trans e : trans (ar_choose e) (M.empty _) e (ar_top e).
+Theorem ar_top_trans e : trans (fst (ar_choose e)) (snd (ar_choose e)) (M.empty _) e (ar_top e).
 Proof.
   destruct (ar_choose_ok e) as [HLa Hok]. unfold ar_top.
-  eapply (proj1 (ar_trans (ar_choose e) (maxv e 1%positive) HLa)); [ exact Hok | | lia ].
+  eapply (proj1 (ar_trans (fst (ar_choose e)) (snd (ar_choose e)) (maxv e 1%positive) HLa)); [ exact Hok | | lia ].
   eapply (proj1 vle_maxv).
 Qed.
 
@@ -634,7 +663,7 @@ Section Top.
 
   Theorem ar_top_correct e : E_web cenv (dead_bound 0 0) (dead_bound 0 0) e (ar_top e).
   Proof.
-    eapply (E_web_ar cenv (ar_choose e) (dead_bound 0 0) (Hprops := dead_bound_properties cenv 0 0 (le_n _)));
+    eapply (E_web_ar cenv (fst (ar_choose e)) (snd (ar_choose e)) (dead_bound 0 0) (Hprops := dead_bound_properties cenv 0 0 (le_n _)));
       [ eapply dead_bound_target_step | eapply ar_top_trans ].
   Qed.
 

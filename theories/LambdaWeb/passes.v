@@ -63,7 +63,7 @@ Section Steps.
   Theorem ar_web_n e : web_n cenv 1 e (ar_top e).
   Proof.
     econstructor; [ eapply ar_top_correct | | eapply dead_bound_web_post ].
-    eapply (proj1 (ar.trans_occurs_free (ar_choose e))). eapply ar_top_trans.
+    eapply (proj1 (ar.trans_occurs_free (fst (ar_choose e)) (snd (ar_choose e)))). eapply ar_top_trans.
   Qed.
 
   (** The specification of defunctionalization, given its hypotheses *)

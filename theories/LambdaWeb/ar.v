@@ -11,10 +11,21 @@
      f x y = e                    ~>   f x y1 .. yn = let y = C(y1, .., yn) in e
      ... f a b ...                ~>   ... let z1 = b.0 in .. let zn = b.(n-1) in f a z1 .. zn ...
 
-   Shapes are found locally: the relation carries a scoped environment [K]
-   of the variables known to hold a constructor of a given web, tag and
-   arity (bound by [Econstr], or flattened parameters of the enclosing
-   function), and flattened arguments of calls must be such variables.
+   The relation carries a scoped environment [K] of the variables whose
+   values are known to conform to a field table [F] (see below), and, for
+   some, to hold a constructor of a given web, tag and arity.  Variables are
+   known when bound by [Econstr] (whose fields match [F]), by a projection of
+   a known field of a known variable, or as parameters at known positions.
+   Each position of a transformed web is [Plain], [Known] (every call passes
+   a known variable, of the given shape if any), or [Flat] (known, of the
+   given shape, and flattened); arguments at known positions must be known.
+
+   The field table [F w t] gives the shapes known for the fields of the
+   constructors of web [w] with tag [t].  Projections check the web and tag
+   of the constructor, so a value that conforms to [F] has fields of the
+   known shapes, which conform themselves: no global invariant is needed.
+   With an empty table, the known variables are the constructors bound in
+   scope and the flattened parameters.
 
    The target takes extra steps (the projections and the rebuilds), which
    the postcondition absorbs ([post_target_step]). *)
@@ -94,96 +105,208 @@ Fixpoint rebuild (xs : list var) (ss : list (option shape)) (yss : list (list va
   | _, _, _ => e
   end.
 
-(** ** The environment of shapes *)
+Lemma nthN_of_nat {A} (l : list A) i : nthN l (N.of_nat i) = nth_error l i.
+Proof.
+  revert i. induction l as [| a l IH]; intros i.
+  - destruct i; reflexivity.
+  - destruct i as [| i]; [ reflexivity |].
+    rewrite nthN_equation. simpl.
+    destruct (Pos.of_succ_nat i) eqn:Hp; rewrite <- IH; f_equal; lia.
+Qed.
 
-(** Flattened arguments are variables of known shape *)
-Fixpoint shape_ok (K : M.t shape) (ys : list var) (ss : list (option shape)) : Prop :=
-  match ys, ss with
-  | y :: ys', Some s :: ss' => K ! y = Some s /\ shape_ok K ys' ss'
-  | _ :: ys', None :: ss' => shape_ok K ys' ss'
+(** ** Known fields *)
+
+(** [F w t]: the shapes of the fields of the constructors of web [w] with
+    tag [t], [None] for a field of unknown shape *)
+Definition ftable : Type := web -> ctor_tag -> list (option shape).
+
+(** A value conforms to [F] if its known fields have their shapes and
+    conform *)
+Inductive conf (F : ftable) : val -> Prop :=
+| Conf_fun : forall rho B f, conf F (Vfun rho B f)
+| Conf_constr :
+    forall w t us,
+      (forall i s, nth_error (F w t) i = Some (Some s) ->
+                   exists u, nth_error us i = Some u /\ shaped (Some s) u /\ conf F u) ->
+      conf F (Vconstr w t us).
+
+(** ** Positions *)
+
+Inductive pos : Type :=
+| Plain                          (* nothing known *)
+| Known (os : option shape)      (* known, of shape [os] if any *)
+| Flat (s : shape).              (* known, of shape [s], and flattened *)
+
+(** The flattening of a position, and what is known of it *)
+Definition pshape (p : pos) : option shape := match p with Flat s => Some s | _ => None end.
+
+Definition pknown (p : pos) : option (option shape) :=
+  match p with Plain => None | Known os => Some os | Flat s => Some (Some s) end.
+
+Definition pos_inv (F : ftable) (p : pos) (v : val) : Prop :=
+  match pknown p with Some os => shaped os v /\ conf F v | None => True end.
+
+Lemma pos_inv_shaped F ps vs : Forall2 (pos_inv F) ps vs -> Forall2 shaped (map pshape ps) vs.
+Proof.
+  intros H. induction H as [| p v ps vs Hp H IH]; constructor; auto.
+  destruct p; simpl in *; try exact I. apply Hp.
+Qed.
+
+Lemma map_pshape_length ps : length (map pshape ps) = length ps.
+Proof. apply length_map. Qed.
+
+(** ** The environment of known variables *)
+
+(** [K ! x = Some os]: [x] is known, of shape [os] if any *)
+Definition kenv : Type := M.t (option shape).
+
+(** Arguments at known positions are known *)
+Definition known_ok (K : kenv) (y : var) (p : pos) : Prop :=
+  match pknown p with
+  | None => True
+  | Some None => K ! y <> None
+  | Some (Some s) => K ! y = Some (Some s)
+  end.
+
+Fixpoint shape_ok (K : kenv) (ys : list var) (ps : list pos) : Prop :=
+  match ys, ps with
+  | y :: ys', p :: ps' => known_ok K y p /\ shape_ok K ys' ps'
   | _, _ => True
   end.
 
-(** The shapes of the parameters *)
-Fixpoint param_shapes (xs : list var) (ss : list (option shape)) (K : M.t shape) : M.t shape :=
-  match xs, ss with
-  | x :: xs', Some s :: ss' => M.set x s (param_shapes xs' ss' K)
-  | x :: xs', None :: ss' => M.remove x (param_shapes xs' ss' K)
+(** The fields of a constructor match the field table *)
+Definition fields_ok (K : kenv) (ys : list var) (fs : list (option shape)) : Prop :=
+  forall i s, nth_error fs i = Some (Some s) -> exists y, nth_error ys i = Some y /\ K ! y = Some (Some s).
+
+(** What is known of the parameters *)
+Fixpoint param_shapes (xs : list var) (ps : list pos) (K : kenv) : kenv :=
+  match xs, ps with
+  | x :: xs', p :: ps' =>
+      match pknown p with
+      | Some os => M.set x os (param_shapes xs' ps' K)
+      | None => M.remove x (param_shapes xs' ps' K)
+      end
   | x :: xs', [] => M.remove x (param_shapes xs' [] K)
   | [], _ => K
   end.
 
-Fixpoint remove_names (B : fundefs) (K : M.t shape) : M.t shape :=
+Fixpoint remove_names (B : fundefs) (K : kenv) : kenv :=
   match B with
   | Fcons f _ _ _ B' => M.remove f (remove_names B' K)
   | Fnil => K
   end.
 
-(** The invariant of [K]: its variables hold constructors of their shape *)
-Definition K_inv (K : M.t shape) (rho : env) :=
-  forall x s, K ! x = Some s -> exists v, M.get x rho = Some v /\ shaped (Some s) v.
+Section Known.
 
-Lemma K_inv_empty rho : K_inv (M.empty _) rho.
-Proof. intros x s H. rewrite M.gempty in H. congruence. Qed.
+  Variable (F : ftable).
 
-Lemma K_inv_set K rho x s v : K_inv K rho -> shaped (Some s) v -> K_inv (M.set x s K) (M.set x v rho).
-Proof.
-  intros HK Hv z s' Hz. destruct (peq z x); subst.
-  - rewrite M.gss in *. inv Hz. eexists; split; eauto.
-  - rewrite M.gso in *; eauto.
-Qed.
+  (** The invariant of [K]: its variables conform, and have their shapes *)
+  Definition K_inv (K : kenv) (rho : env) :=
+    forall x os, K ! x = Some os -> exists v, M.get x rho = Some v /\ shaped os v /\ conf F v.
 
-Lemma K_inv_remove K rho x v : K_inv K rho -> K_inv (M.remove x K) (M.set x v rho).
-Proof.
-  intros HK z s Hz. destruct (peq z x); subst.
-  - rewrite M.grs in *. congruence.
-  - rewrite M.gro in Hz; eauto. rewrite M.gso; eauto.
-Qed.
+  Lemma K_inv_empty rho : K_inv (M.empty _) rho.
+  Proof. intros x s H. rewrite M.gempty in H. congruence. Qed.
 
-Lemma K_inv_set_lists K rho rho' xs vs ss :
-  K_inv K rho -> Forall2 shaped ss vs \/ ss = [] -> set_lists xs vs rho = Some rho' ->
-  K_inv (param_shapes xs ss K) rho'.
-Proof.
-  revert vs ss rho'. induction xs as [| x xs IH]; intros vs ss rho' HK Hss Hs.
-  - destruct vs; simpl in Hs; inv Hs. destruct ss; eauto.
-  - destruct vs as [| v vs]; simpl in Hs; try congruence.
-    destruct (set_lists xs vs rho) as [rho'' |] eqn:Hs'; inv Hs.
-    destruct Hss as [Hss | ->].
-    + destruct ss as [| [s |] ss]; inv Hss; simpl in *.
-      * eapply K_inv_set; eauto.
-      * eapply K_inv_remove; eauto.
-    + simpl. eapply K_inv_remove. eapply (IH vs []); eauto.
-Qed.
+  Lemma K_inv_set K rho x os v : K_inv K rho -> shaped os v -> conf F v -> K_inv (M.set x os K) (M.set x v rho).
+  Proof.
+    intros HK Hv Hc z s' Hz. destruct (peq z x); subst.
+    - rewrite M.gss in *. inv Hz. eexists; split; eauto.
+    - rewrite M.gso in *; eauto.
+  Qed.
 
-Lemma K_inv_def_funs K rho B0 B rhoc :
-  K_inv K rho -> K_inv (remove_names B K) (def_funs B0 B rhoc rho).
-Proof. induction B; simpl; eauto. intros HK. eapply K_inv_remove; eauto. Qed.
+  Lemma K_inv_remove K rho x v : K_inv K rho -> K_inv (M.remove x K) (M.set x v rho).
+  Proof.
+    intros HK z s Hz. destruct (peq z x); subst.
+    - rewrite M.grs in *. congruence.
+    - rewrite M.gro in Hz; eauto. rewrite M.gso; eauto.
+  Qed.
 
-Lemma shape_ok_vals K rho ys vs ss :
-  K_inv K rho -> shape_ok K ys ss -> get_list ys rho = Some vs -> length ys = length ss ->
-  Forall2 shaped ss vs.
-Proof.
-  revert vs ss. induction ys as [| y ys IH]; intros vs ss HK Hok Hget Hlen; simpl in *.
-  - inv Hget. destruct ss; simpl in *; try congruence. constructor.
-  - destruct (M.get y rho) eqn:Hy; try congruence.
-    destruct (get_list ys rho) eqn:Hys; try congruence. inv Hget.
-    destruct ss as [| [s |] ss]; simpl in *; try congruence; inv Hlen.
-    + destruct Hok as [Hs Hok]. constructor; eauto.
-      eapply HK in Hs. destruct Hs as (v' & Hv' & Hsh). congruence.
-    + constructor; [ exact I | eauto ].
-Qed.
+  Lemma K_inv_set_lists K rho rho' xs vs ps :
+    K_inv K rho -> Forall2 (pos_inv F) ps vs \/ ps = [] -> set_lists xs vs rho = Some rho' ->
+    K_inv (param_shapes xs ps K) rho'.
+  Proof.
+    revert vs ps rho'. induction xs as [| x xs IH]; intros vs ps rho' HK Hps Hs.
+    - destruct vs; simpl in Hs; inv Hs. destruct ps; eauto.
+    - destruct vs as [| v vs]; simpl in Hs; try congruence.
+      destruct (set_lists xs vs rho) as [rho'' |] eqn:Hs'; inv Hs.
+      destruct Hps as [Hps | ->].
+      + destruct ps as [| p ps]; inversion Hps as [| p' v' ps' vs' Hp Hps']; subst; simpl.
+        unfold pos_inv in Hp. destruct (pknown p) as [os |].
+        * destruct Hp. eapply K_inv_set; eauto.
+        * eapply K_inv_remove; eauto.
+      + simpl. eapply K_inv_remove. eapply (IH vs []); eauto.
+  Qed.
+
+  Lemma K_inv_def_funs K rho B0 B rhoc :
+    K_inv K rho -> K_inv (remove_names B K) (def_funs B0 B rhoc rho).
+  Proof. induction B; simpl; eauto. intros HK. eapply K_inv_remove; eauto. Qed.
+
+  Lemma shape_ok_vals K rho ys vs ps :
+    K_inv K rho -> shape_ok K ys ps -> get_list ys rho = Some vs -> length ys = length ps ->
+    Forall2 (pos_inv F) ps vs.
+  Proof.
+    revert vs ps. induction ys as [| y ys IH]; intros vs ps HK Hok Hget Hlen; simpl in *.
+    - inv Hget. destruct ps; simpl in *; try congruence. constructor.
+    - destruct (M.get y rho) eqn:Hy; try congruence.
+      destruct (get_list ys rho) eqn:Hys; try congruence. inv Hget.
+      destruct ps as [| p ps]; simpl in *; try congruence; inv Hlen.
+      destruct Hok as [Hk Hok]. constructor; eauto.
+      unfold known_ok, pos_inv in *. destruct (pknown p) as [[s |] |]; [| | exact I ].
+      + eapply HK in Hk. destruct Hk as (v' & Hv' & Hsh & Hc). rewrite Hy in Hv'. inv Hv'. auto.
+      + destruct (K ! y) as [os |] eqn:Hky; [| congruence ].
+        eapply HK in Hky. destruct Hky as (v' & Hv' & Hsh & Hc). rewrite Hy in Hv'. inv Hv'.
+        split; [ exact I | exact Hc ].
+  Qed.
+
+  (** A constructor whose fields match the table conforms *)
+  Lemma conf_constr K rho w t ys vs :
+    K_inv K rho -> fields_ok K ys (F w t) -> get_list ys rho = Some vs -> conf F (Vconstr w t vs).
+  Proof.
+    intros HK Hf Hg. constructor. intros i s Hi.
+    destruct (Hf i s Hi) as (y & Hy & Hky).
+    destruct (HK _ _ Hky) as (v & Hv & Hsh & Hc).
+    exists v. split; [| split; assumption ].
+    clear - Hy Hv Hg. revert i vs Hy Hg. induction ys as [| y' ys IH]; intros i vs Hy Hg; [ destruct i; inv Hy |].
+    simpl in Hg. destruct (M.get y' rho) eqn:Hy'; [| congruence ].
+    destruct (get_list ys rho) eqn:Hys; [| congruence ]. inv Hg.
+    destruct i; simpl in *; [ inv Hy; congruence | eauto ].
+  Qed.
+
+  (** A known field of a conforming constructor has its shape, and conforms *)
+  Lemma conf_proj w t vs n v s :
+    conf F (Vconstr w t vs) -> nthN vs n = Some v -> nth_error (F w t) (N.to_nat n) = Some (Some s) ->
+    shaped (Some s) v /\ conf F v.
+  Proof.
+    intros Hc Hn Hf. inversion Hc as [| w' t' us' Hus]; subst. destruct (Hus _ _ Hf) as (u & Hu & Hsh & Hcu).
+    assert (Hn' : nth_error vs (N.to_nat n) = Some v).
+    { rewrite <- (Nnat.N2Nat.id n) in Hn. rewrite nthN_of_nat in Hn. exact Hn. }
+    rewrite Hn' in Hu. inv Hu. auto.
+  Qed.
+
+End Known.
 
 (** * The relation *)
 
 Section AR_spec.
 
-  Variable (La : WM.t (list (option shape))).
+  Variables (F : ftable) (La : WM.t (list pos)).
 
-  Inductive trans : M.t shape -> exp -> exp -> Prop :=
+  Inductive trans : kenv -> exp -> exp -> Prop :=
   | Trans_constr :
       forall K x w t ys e e',
-        trans (M.set x (w, length ys, t) K) e e' ->
+        fields_ok K ys (F w t) ->
+        trans (M.set x (Some (w, length ys, t)) K) e e' ->
         trans K (Econstr x w t ys e) (Econstr x w t ys e')
+  | Trans_constr_unknown :
+      forall K x w t ys e e',
+        trans (M.remove x K) e e' ->
+        trans K (Econstr x w t ys e) (Econstr x w t ys e')
+  | Trans_proj_known :
+      forall K x w t i y e e' s,
+        K ! y <> None ->
+        nth_error (F w t) (N.to_nat i) = Some (Some s) ->
+        trans (M.set x (Some s) K) e e' ->
+        trans K (Eproj x w t i y e) (Eproj x w t i y e')
   | Trans_proj :
       forall K x w t i y e e',
         trans (M.remove x K) e e' ->
@@ -202,33 +325,34 @@ Section AR_spec.
         trans (M.remove x K) e e' ->
         trans K (Eletapp x f w ys e) (Eletapp x f w ys e')
   | Trans_letapp :
-      forall K x f w ys e e' ss zss,
+      forall K x f w ys e e' ps zss,
         exposedb w = false ->
-        WM.get w La = Some ss ->
-        length ys = length ss ->
-        shape_ok K ys ss ->
-        Forall pos_ok ss ->
-        Forall2 fresh_ok ss zss ->
+        WM.get w La = Some ps ->
+        length ys = length ps ->
+        shape_ok K ys ps ->
+        Forall pos_ok (map pshape ps) ->
+        Forall2 fresh_ok (map pshape ps) zss ->
         NoDup (concat zss) ->
         Disjoint _ (FromList (concat zss)) (f |: FromList ys) ->
         Disjoint _ (FromList (concat zss)) (occurs_free e' \\ [set x]) ->
         trans (M.remove x K) e e' ->
-        trans K (Eletapp x f w ys e) (proj_args ys ss zss (Eletapp x f w (flat_vars ys ss zss) e'))
+        trans K (Eletapp x f w ys e)
+              (proj_args ys (map pshape ps) zss (Eletapp x f w (flat_vars ys (map pshape ps) zss) e'))
   | Trans_app_exposed :
       forall K f w ys,
         keeps (sel_L La) w = true ->
         trans K (Eapp f w ys) (Eapp f w ys)
   | Trans_app :
-      forall K f w ys ss zss,
+      forall K f w ys ps zss,
         exposedb w = false ->
-        WM.get w La = Some ss ->
-        length ys = length ss ->
-        shape_ok K ys ss ->
-        Forall pos_ok ss ->
-        Forall2 fresh_ok ss zss ->
+        WM.get w La = Some ps ->
+        length ys = length ps ->
+        shape_ok K ys ps ->
+        Forall pos_ok (map pshape ps) ->
+        Forall2 fresh_ok (map pshape ps) zss ->
         NoDup (concat zss) ->
         Disjoint _ (FromList (concat zss)) (f |: FromList ys) ->
-        trans K (Eapp f w ys) (proj_args ys ss zss (Eapp f w (flat_vars ys ss zss)))
+        trans K (Eapp f w ys) (proj_args ys (map pshape ps) zss (Eapp f w (flat_vars ys (map pshape ps) zss)))
   | Trans_fun :
       forall K B B' e e',
         trans_fundefs (remove_names B K) B B' ->
@@ -245,7 +369,7 @@ Section AR_spec.
   | Trans_halt :
       forall K x,
         trans K (Ehalt x) (Ehalt x)
-  with trans_fundefs : M.t shape -> fundefs -> fundefs -> Prop :=
+  with trans_fundefs : kenv -> fundefs -> fundefs -> Prop :=
   | Trans_Fnil : forall K, trans_fundefs K Fnil Fnil
   | Trans_Fcons_exposed :
       forall K f w xs e e' B B',
@@ -254,17 +378,18 @@ Section AR_spec.
         trans_fundefs K B B' ->
         trans_fundefs K (Fcons f w xs e B) (Fcons f w xs e' B')
   | Trans_Fcons :
-      forall K f w xs e e' B B' ss yss,
+      forall K f w xs e e' B B' ps yss,
         exposedb w = false ->
-        WM.get w La = Some ss ->
-        length ss = length xs ->
-        Forall info_ok ss ->
-        Forall2 fresh_ok ss yss ->
+        WM.get w La = Some ps ->
+        length ps = length xs ->
+        Forall info_ok (map pshape ps) ->
+        Forall2 fresh_ok (map pshape ps) yss ->
         NoDup (xs ++ concat yss) ->
         Disjoint _ (FromList (concat yss)) (occurs_free e') ->
-        trans (param_shapes xs ss K) e e' ->
+        trans (param_shapes xs ps K) e e' ->
         trans_fundefs K B B' ->
-        trans_fundefs K (Fcons f w xs e B) (Fcons f w (flat_vars xs ss yss) (rebuild xs ss yss e') B').
+        trans_fundefs K (Fcons f w xs e B)
+                      (Fcons f w (flat_vars xs (map pshape ps) yss) (rebuild xs (map pshape ps) yss e') B').
 
   Scheme trans_mut := Induction for trans Sort Prop
   with trans_fundefs_mut := Induction for trans_fundefs Sort Prop.
@@ -294,11 +419,12 @@ Section AR_spec.
     exists e',
       (keeps (sel_L La) w = true /\ trans (param_shapes xs [] K) e e' /\
        find_def f B' = Some (w, xs, e')) \/
-      (exists ss yss, exposedb w = false /\ WM.get w La = Some ss /\ length ss = length xs /\
-                      Forall info_ok ss /\ Forall2 fresh_ok ss yss /\ NoDup (xs ++ concat yss) /\
+      (exists ps yss, exposedb w = false /\ WM.get w La = Some ps /\ length ps = length xs /\
+                      Forall info_ok (map pshape ps) /\ Forall2 fresh_ok (map pshape ps) yss /\
+                      NoDup (xs ++ concat yss) /\
                       Disjoint _ (FromList (concat yss)) (occurs_free e') /\
-                      trans (param_shapes xs ss K) e e' /\
-                      find_def f B' = Some (w, flat_vars xs ss yss, rebuild xs ss yss e')).
+                      trans (param_shapes xs ps K) e e' /\
+                      find_def f B' = Some (w, flat_vars xs (map pshape ps) yss, rebuild xs (map pshape ps) yss e')).
   Proof.
     intros H; induction H; simpl; intros Hfn; try congruence;
       destruct (M.elt_eq f f0); subst; eauto.
@@ -399,34 +525,36 @@ Qed.
 
 Section AR_fv.
 
-  Variable (La : WM.t (list (option shape))).
+  Variables (F : ftable) (La : WM.t (list pos)).
 
   Lemma trans_occurs_free :
-    (forall K e e', trans La K e e' -> occurs_free e' \subset occurs_free e) /\
-    (forall K B B', trans_fundefs La K B B' -> occurs_free_fundefs B' \subset occurs_free_fundefs B).
+    (forall K e e', trans F La K e e' -> occurs_free e' \subset occurs_free e) /\
+    (forall K B B', trans_fundefs F La K B B' -> occurs_free_fundefs B' \subset occurs_free_fundefs B).
   Proof.
     apply trans_mutind; intros; normalize_occurs_free.
     all: repeat match goal with
-                | [ Ht : trans_fundefs _ _ ?B ?B' |- context[name_in_fundefs ?B'] ] =>
-                    rewrite <- (trans_fundefs_names_eq _ _ _ _ Ht)
+                | [ Ht : trans_fundefs _ _ _ ?B ?B' |- context[name_in_fundefs ?B'] ] =>
+                    rewrite <- (trans_fundefs_names_eq _ _ _ _ _ Ht)
                 end.
     all: try solve [ sets ].
     - (* Eletapp, internal *)
-      intros z Hz. edestruct occurs_free_proj_args as [Hy | [Hk Hn]]; [ eassumption | eassumption | exact Hz | |].
+      intros z Hz. eapply occurs_free_proj_args in Hz; [| rewrite length_map; eassumption | eassumption ].
+      destruct Hz as [Hy | [Hk Hn]].
       + left. now right.
       + apply occurs_free_Eletapp in Hk. destruct Hk as [z' Hk | z' [Hk Hx]].
         * destruct Hk as [z' Hk | z' Hk]; [ left; now left |].
           apply FromList_flat_vars in Hk. destruct Hk as [z' Hk | z' Hk]; [ left; now right | contradiction ].
         * right. constructor; [ eauto | exact Hx ].
     - (* Eapp, internal *)
-      intros z Hz. edestruct occurs_free_proj_args as [Hy | [Hk Hn]]; [ eassumption | eassumption | exact Hz | |].
+      intros z Hz. eapply occurs_free_proj_args in Hz; [| rewrite length_map; eassumption | eassumption ].
+      destruct Hz as [Hy | [Hk Hn]].
       + now left.
       + apply occurs_free_Eapp in Hk. destruct Hk as [z' Hk | z' Hk]; [| now right ].
         apply FromList_flat_vars in Hk. destruct Hk as [z' Hk | z' Hk]; [ now left | contradiction ].
     - (* Fcons, internal *)
       eapply Included_Union_compat; [| eapply Included_Setminus_compat; [ eassumption | reflexivity ] ].
       intros z [Hz Hn].
-      assert (Hlen' : length xs = length ss) by congruence.
+      assert (Hlen' : length xs = length (map pshape ps)) by (rewrite length_map; congruence).
       edestruct occurs_free_rebuild as [Hy | [Hfv Hin]]; [ exact Hlen' | eassumption | exact Hz | |].
       + exfalso. apply Hn. right. left. eapply flat_vars_concat; eauto.
       + constructor; [ eauto |].
@@ -436,15 +564,6 @@ Section AR_fv.
   Qed.
 
 End AR_fv.
-
-Lemma nthN_of_nat {A} (l : list A) i : nthN l (N.of_nat i) = nth_error l i.
-Proof.
-  revert i. induction l as [| a l IH]; intros i.
-  - destruct i; reflexivity.
-  - destruct i as [| i]; [ reflexivity |].
-    rewrite nthN_equation. simpl.
-    destruct (Pos.of_succ_nat i) eqn:Hp; rewrite <- IH; f_equal; lia.
-Qed.
 
 Lemma NoDup_app_split {A} (l1 l2 : list A) :
   NoDup (l1 ++ l2) -> NoDup l1 /\ NoDup l2 /\ (forall x, List.In x l1 -> ~ List.In x l2).
@@ -615,7 +734,7 @@ Section AR_rel.
   Local Notation PostGT := (@exposed.PostGT fuel trace).
   Local Notation VTransT := (@exposed.VTransT fuel trace).
 
-  Variable (La : WM.t (list (option shape))).
+  Variables (F : ftable) (La : WM.t (list pos)).
 
   (** Internal closures: calling the source closure on arguments of the
       right shapes is related to calling the target closure on their
@@ -627,16 +746,16 @@ Section AR_rel.
           forall vs1 vs2 j w xs1 e1 rho1',
             find_def f1 B1 = Some (w, xs1, e1) ->
             Some rho1' = set_lists xs1 vs1 (def_funs B1 B1 rho1 rho1) ->
-            exists ss yss e2,
-              WM.get w La = Some ss /\
-              find_def f2 B2 = Some (w, flat_vars xs1 ss yss, e2) /\
-              (Forall2 shaped ss vs1 ->
-               length vs2 = length (flat_vals vs1 ss) ->
+            exists ps yss e2,
+              WM.get w La = Some ps /\
+              find_def f2 B2 = Some (w, flat_vars xs1 (map pshape ps) yss, e2) /\
+              (Forall2 (pos_inv F) ps vs1 ->
+               length vs2 = length (flat_vals vs1 (map pshape ps)) ->
                exists rho2',
-                 Some rho2' = set_lists (flat_vars xs1 ss yss) vs2 (def_funs B2 B2 rho2 rho2) /\
+                 Some rho2' = set_lists (flat_vars xs1 (map pshape ps) yss) vs2 (def_funs B2 B2 rho2 rho2) /\
                  (j < k ->
                   Forall wf_val vs1 ->
-                  Forall2 (V' j) (flat_vals vs1 ss) vs2 ->
+                  Forall2 (V' j) (flat_vals vs1 (map pshape ps)) vs2 ->
                   E' cenv V' PG (exposedb w) j (e1, rho1') (e2, rho2')))
       | _, _ => False
       end.
@@ -864,13 +983,13 @@ Section AR_rel.
 
   Context {P : PostT} {Hprops : Post_properties cenv P P PG} (Htgt : post_target_step P).
 
-  Lemma E_call_inner ex k rho1 rho2 f w ys ys2 ss vs1 vs2 :
+  Lemma E_call_inner ex k rho1 rho2 f w ys ys2 ps vs1 vs2 :
     exposedb w = false ->
-    WM.get w La = Some ss ->
+    WM.get w La = Some ps ->
     get_list ys rho1 = Some vs1 ->
-    get_list ys2 rho2 = Some (flat_vals vs2 ss) ->
-    Forall2 shaped ss vs1 ->
-    Forall2 (V k) (flat_vals vs1 ss) (flat_vals vs2 ss) ->
+    get_list ys2 rho2 = Some (flat_vals vs2 (map pshape ps)) ->
+    Forall2 (pos_inv F) ps vs1 ->
+    Forall2 (V k) (flat_vals vs1 (map pshape ps)) (flat_vals vs2 (map pshape ps)) ->
     wf_env rho1 ->
     var_rel k rho1 rho2 f f ->
     E P ex k (Eapp f w ys, rho1) (Eapp f w ys2, rho2).
@@ -884,7 +1003,7 @@ Section AR_rel.
       eapply (V_sel_internal cenv (sel_L La) VT_ar PG) in Hv;
         [| eassumption | eassumption | eapply sel_L_Some; eassumption ].
       destruct v2; try contradiction.
-      edestruct (Hv vs1 (flat_vals vs2 ss) (k - 1)) as (ss' & yss & e2 & HL' & Hf2 & Hbody); eauto.
+      edestruct (Hv vs1 (flat_vals vs2 (map pshape ps)) (k - 1)) as (ps' & yss & e2 & HL' & Hf2 & Hbody); eauto.
       rewrite HL in HL'. inv HL'.
       edestruct Hbody as (rho2' & Hset2 & Hb); [ exact Hsh | symmetry; eapply Forall2_length; eauto |].
       edestruct Hb as (r2 & cin' & cout' & Hstep2 & Hpost & HR);
@@ -899,13 +1018,13 @@ Section AR_rel.
         * eapply (R_mono cenv VT_arS); eauto. fuel_arith.
   Qed.
 
-  Lemma E_letapp_inner ex k rho1 rho2 x f w ys ys2 ss vs1 vs2 e1 e2 :
+  Lemma E_letapp_inner ex k rho1 rho2 x f w ys ys2 ps vs1 vs2 e1 e2 :
     exposedb w = false ->
-    WM.get w La = Some ss ->
+    WM.get w La = Some ps ->
     get_list ys rho1 = Some vs1 ->
-    get_list ys2 rho2 = Some (flat_vals vs2 ss) ->
-    Forall2 shaped ss vs1 ->
-    Forall2 (V k) (flat_vals vs1 ss) (flat_vals vs2 ss) ->
+    get_list ys2 rho2 = Some (flat_vals vs2 (map pshape ps)) ->
+    Forall2 (pos_inv F) ps vs1 ->
+    Forall2 (V k) (flat_vals vs1 (map pshape ps)) (flat_vals vs2 (map pshape ps)) ->
     wf_env rho1 ->
     var_rel k rho1 rho2 f f ->
     (forall m v1 v2, m < k -> V m v1 v2 -> E P ex m (e1, M.set x v1 rho1) (e2, M.set x v2 rho2)) ->
@@ -922,7 +1041,7 @@ Section AR_rel.
          eapply (V_sel_internal cenv (sel_L La) VT_ar PG) in Hv;
          [| eassumption | eassumption | eapply sel_L_Some; eassumption ];
          destruct v2; try contradiction;
-         edestruct (Hv vs1 (flat_vals vs2 ss) (k - 1)) as (ss' & yss & eb2 & HL' & Hf2 & Hbody); eauto;
+         edestruct (Hv vs1 (flat_vals vs2 (map pshape ps)) (k - 1)) as (ps' & yss & eb2 & HL' & Hf2 & Hbody); eauto;
          rewrite HL in HL'; inv HL';
          edestruct Hbody as (rho2' & Hset2 & Hb); [ exact Hsh | symmetry; eapply Forall2_length; eauto |]).
       + edestruct Hb as (r2 & cin' & cout' & Hstep2 & Hpost & HR);
@@ -963,19 +1082,19 @@ Section AR_rel.
     - edestruct Hstuck as (vs & Hvs); eauto. congruence.
   Qed.
 
-  Lemma E_app_ar ex k K rho1 rho2 f w ys ss zss :
-    exposedb w = false -> WM.get w La = Some ss -> length ys = length ss ->
-    K_inv K rho1 -> shape_ok K ys ss ->
-    Forall2 fresh_ok ss zss -> NoDup (concat zss) -> Disjoint _ (FromList (concat zss)) (f |: FromList ys) ->
+  Lemma E_app_ar ex k K rho1 rho2 f w ys ps zss :
+    exposedb w = false -> WM.get w La = Some ps -> length ys = length ps ->
+    K_inv F K rho1 -> shape_ok K ys ps ->
+    Forall2 fresh_ok (map pshape ps) zss -> NoDup (concat zss) -> Disjoint _ (FromList (concat zss)) (f |: FromList ys) ->
     wf_env rho1 -> wf_env rho2 -> var_rel k rho1 rho2 f f -> Forall2 (var_rel k rho1 rho2) ys ys ->
-    E P ex k (Eapp f w ys, rho1) (proj_args ys ss zss (Eapp f w (flat_vars ys ss zss)), rho2).
+    E P ex k (Eapp f w ys, rho1) (proj_args ys (map pshape ps) zss (Eapp f w (flat_vars ys (map pshape ps) zss)), rho2).
   Proof.
     intros Hw HL Hlen HK Hok Hfr Hnd Hdis Hwf Hwf2 Hfun Hall.
     destruct (get_list ys rho1) as [vs1 |] eqn:Hg1.
     - edestruct (var_rel_get_list cenv VT_arS PG) as (vs2 & Hg2 & Hvs); [ exact Hall | exact Hg1 |].
-      pose proof (shape_ok_vals _ _ _ _ _ HK Hok Hg1 Hlen) as Hsh1.
-      destruct (shaped_V _ _ _ _ Hsh1 Hvs) as [Hsh2 Hflat].
-      eapply E_proj_args; [ exact Htgt | exact Hlen | exact Hfr | exact Hnd | | exact Hg2 | exact Hsh2 | exact Hwf2 |].
+      pose proof (shape_ok_vals _ _ _ _ _ _ HK Hok Hg1 Hlen) as Hpi1.
+      destruct (shaped_V _ _ _ _ (pos_inv_shaped _ _ _ Hpi1) Hvs) as [Hsh2 Hflat].
+      eapply E_proj_args; [ exact Htgt | rewrite length_map; exact Hlen | exact Hfr | exact Hnd | | exact Hg2 | exact Hsh2 | exact Hwf2 |].
       { eapply Disjoint_Included_r; [| exact Hdis ]. sets. }
       intros rho2' Hext Hgf _. eapply E_call_inner; eauto.
       intros v1 Hget1. edestruct Hfun as (v2 & Hget2 & Hv); eauto. exists v2. split; [| exact Hv ].
@@ -983,23 +1102,23 @@ Section AR_rel.
     - eapply E_stuck_args; [ exact Hg1 |]. intros cin r cout Hs. inv Hs. eauto.
   Qed.
 
-  Lemma E_letapp_ar ex k K rho1 rho2 x f w ys ss zss e1 e2 :
-    exposedb w = false -> WM.get w La = Some ss -> length ys = length ss ->
-    K_inv K rho1 -> shape_ok K ys ss ->
-    Forall2 fresh_ok ss zss -> NoDup (concat zss) -> Disjoint _ (FromList (concat zss)) (f |: FromList ys) ->
+  Lemma E_letapp_ar ex k K rho1 rho2 x f w ys ps zss e1 e2 :
+    exposedb w = false -> WM.get w La = Some ps -> length ys = length ps ->
+    K_inv F K rho1 -> shape_ok K ys ps ->
+    Forall2 fresh_ok (map pshape ps) zss -> NoDup (concat zss) -> Disjoint _ (FromList (concat zss)) (f |: FromList ys) ->
     wf_env rho1 -> wf_env rho2 -> var_rel k rho1 rho2 f f -> Forall2 (var_rel k rho1 rho2) ys ys ->
     (forall rho2', (forall z, ~ List.In z (concat zss) -> M.get z rho2' = M.get z rho2) -> wf_env rho2' ->
                    forall m v1 v2, m < k -> V m v1 v2 ->
                                    E P ex m (e1, M.set x v1 rho1) (e2, M.set x v2 rho2')) ->
     E P ex k (Eletapp x f w ys e1, rho1)
-      (proj_args ys ss zss (Eletapp x f w (flat_vars ys ss zss) e2), rho2).
+      (proj_args ys (map pshape ps) zss (Eletapp x f w (flat_vars ys (map pshape ps) zss) e2), rho2).
   Proof.
     intros Hw HL Hlen HK Hok Hfr Hnd Hdis Hwf Hwf2 Hfun Hall Hk.
     destruct (get_list ys rho1) as [vs1 |] eqn:Hg1.
     - edestruct (var_rel_get_list cenv VT_arS PG) as (vs2 & Hg2 & Hvs); [ exact Hall | exact Hg1 |].
-      pose proof (shape_ok_vals _ _ _ _ _ HK Hok Hg1 Hlen) as Hsh1.
-      destruct (shaped_V _ _ _ _ Hsh1 Hvs) as [Hsh2 Hflat].
-      eapply E_proj_args; [ exact Htgt | exact Hlen | exact Hfr | exact Hnd | | exact Hg2 | exact Hsh2 | exact Hwf2 |].
+      pose proof (shape_ok_vals _ _ _ _ _ _ HK Hok Hg1 Hlen) as Hpi1.
+      destruct (shaped_V _ _ _ _ (pos_inv_shaped _ _ _ Hpi1) Hvs) as [Hsh2 Hflat].
+      eapply E_proj_args; [ exact Htgt | rewrite length_map; exact Hlen | exact Hfr | exact Hnd | | exact Hg2 | exact Hsh2 | exact Hwf2 |].
       { eapply Disjoint_Included_r; [| exact Hdis ]. sets. }
       intros rho2' Hext Hgf Hwf2'. eapply E_letapp_inner; eauto.
       intros v1 Hget1. edestruct Hfun as (v2 & Hget2 & Hv); eauto. exists v2. split; [| exact Hv ].
@@ -1059,15 +1178,15 @@ Section AR_rel.
   Definition IH_exp k :=
     forall m K ex e e' rho1 rho2,
       m < k ->
-      trans La K e e' ->
-      K_inv K rho1 ->
+      trans F La K e e' ->
+      K_inv F K rho1 ->
       G m (occurs_free e') rho1 rho2 ->
       E P ex m (e, rho1) (e', rho2).
 
   Lemma Vfun_ar k K rho1 rho2 B B' :
-    trans_fundefs La K B B' ->
+    trans_fundefs F La K B B' ->
     IH_exp k ->
-    K_inv K (def_funs B B rho1 rho1) ->
+    K_inv F K (def_funs B B rho1 rho1) ->
     G k (occurs_free_fundefs B') rho1 rho2 ->
     forall f, name_in_fundefs B f -> V k (Vfun rho1 B f) (Vfun rho2 B' f).
   Proof.
@@ -1110,14 +1229,16 @@ Section AR_rel.
         | eassumption | eassumption | eapply sel_L_Some; eassumption |].
       unfold VT_ar; cbn -[E']. intros vs1 vs2 j w' xs1 e1 rho1' Hf1 Hs1.
       rewrite Hfind in Hf1. inv Hf1.
-      exists ss, yss, (rebuild xs1 ss yss e'). split; [ eassumption | split; [ eassumption |] ].
-      intros Hsh Hlen2.
+      exists ss, yss, (rebuild xs1 (map pshape ss) yss e'). split; [ eassumption | split; [ eassumption |] ].
+      intros Hpi Hlen2. pose proof (pos_inv_shaped _ _ _ Hpi) as Hsh.
+      assert (Hlen0 : length xs1 = length ss) by congruence.
+      rename ss into ps. set (ss := map pshape ps) in *.
+      assert (Hlen' : length xs1 = length ss) by (unfold ss; rewrite length_map; congruence).
       assert (Hlxs : length xs1 = length vs1) by (eapply set_lists_length_eq; symmetry; eassumption).
       edestruct (set_lists_length3 (def_funs B' B' rho2 rho2) (flat_vars xs1 ss yss) vs2) as [rho2' Hs2].
       { rewrite Hlen2. eapply flat_length; eauto. }
       eexists; split; [ symmetry; eassumption |].
       intros Hlt Hwf Hvs.
-      assert (Hlen' : length xs1 = length ss) by congruence.
       assert (Hndf : NoDup (flat_vars xs1 ss yss)) by (eapply NoDup_flat_vars; eauto).
       assert (Hndx : NoDup xs1) by (destruct (NoDup_app_split _ _ Hnd); tauto).
       eapply (E_post_mono cenv VT_arS); [ eassumption |].
@@ -1125,7 +1246,7 @@ Section AR_rel.
                         | eapply get_list_set_lists; eauto | exact Hsh | exact Hvs |].
       intros rho2'' Hext (vs2'' & Hget'' & Hvs'').
       eapply Hexp; [ exact Hlt | exact Htrans | |].
-      + eapply K_inv_set_lists; [ exact HK | left; exact Hsh | symmetry; exact Hs1 ].
+      + eapply K_inv_set_lists; [ exact HK | left; exact Hpi | symmetry; exact Hs1 ].
       + eapply G_params with (rho2 := def_funs B' B' rho2 rho2) (D := FromList (concat yss));
           [ | exact Hndx | symmetry; exact Hs1 | | exact Hdis | exact Hget'' | exact Hvs'' | ].
         * eapply Hbase; [ exact Hlt |].
@@ -1167,8 +1288,8 @@ Section AR_rel.
     [ eapply (G_mono cenv VT_arS); eauto; lia | normalize_occurs_free; sets ].
 
   Lemma fundamental k K ex e e' rho1 rho2 :
-    trans La K e e' ->
-    K_inv K rho1 ->
+    trans F La K e e' ->
+    K_inv F K rho1 ->
     G k (occurs_free e') rho1 rho2 ->
     E P ex k (e, rho1) (e', rho2).
   Proof.
@@ -1178,13 +1299,28 @@ Section AR_rel.
     assert (IH' : IH_exp k) by (intros m K ex e e' r1 r2 Hlt; eapply IH; eauto).
     intros K ex e e' rho1 rho2 Htrans. revert ex rho1 rho2.
     induction Htrans; intros ex rho1 rho2 HK HG.
-    - (* Econstr *)
+    - (* Econstr, known *)
       eapply (E_constr_compat_vals cenv VT_arS); eauto.
       + eapply (G_Forall2_var_rel cenv VT_arS); eauto. normalize_occurs_free. sets.
       + intros m vs1 v2 Hlt Hget Hv.
         eapply IH; [ lia | eassumption | | solve_G_set ].
-        eapply K_inv_set; [ eassumption |]. exists vs1. split; [ reflexivity |].
+        eapply K_inv_set; [ eassumption | | eapply conf_constr; eassumption ].
+        exists vs1. split; [ reflexivity |].
         symmetry. eapply get_list_length'. eassumption.
+    - (* Econstr *)
+      eapply (E_constr_compat_vals cenv VT_arS); eauto.
+      + eapply (G_Forall2_var_rel cenv VT_arS); eauto. normalize_occurs_free. sets.
+      + intros m vs1 v2 Hlt Hget Hv.
+        eapply IH; [ lia | eassumption | solve_K | solve_G_set ].
+    - (* Eproj, known field *)
+      eapply (E_proj_compat_src cenv VT_arS); eauto.
+      + eapply (G_var_rel cenv VT_arS); eauto. fv_mem.
+      + intros m v1 v2 Hlt (vs & Hy & Hn) Hv.
+        eapply IH; [ lia | eassumption | | solve_G_set ].
+        destruct (K ! y) as [os |] eqn:Hky; [| congruence ].
+        destruct (HK _ _ Hky) as (vy & Hvy & _ & Hc). rewrite Hy in Hvy. inv Hvy.
+        destruct (conf_proj _ _ _ _ _ _ _ Hc Hn ltac:(eassumption)) as [Hsh Hcv].
+        eapply K_inv_set; eassumption.
     - (* Eproj *)
       eapply (E_proj_compat cenv VT_arS); eauto.
       + eapply (G_var_rel cenv VT_arS); eauto. fv_mem.
@@ -1210,7 +1346,7 @@ Section AR_rel.
     - (* Eletapp, transformed *)
       assert (Hdl : forall z, List.In z (concat zss) -> ~ List.In z ys).
       { intros z Hz Hc. eapply H6. constructor; [ exact Hz | now right ]. }
-      assert (Hfree : forall z, List.In z (flat_vars ys ss zss) -> occurs_free (Eletapp x f w (flat_vars ys ss zss) e') z).
+      assert (Hfree : forall z, List.In z (flat_vars ys (map pshape ps) zss) -> occurs_free (Eletapp x f w (flat_vars ys (map pshape ps) zss) e') z).
       { intros z Hz. apply occurs_free_Eletapp. left. now right. }
       eapply E_letapp_ar; eauto.
       + apply HG.
@@ -1220,7 +1356,7 @@ Section AR_rel.
         * apply occurs_free_Eletapp. left. now left.
         * intros Hc. eapply H6. constructor; [ exact Hc | now left ].
       + eapply Forall2_var_rel_In. intros y Hy. eapply (G_var_rel cenv VT_arS); eauto.
-        eapply occurs_free_proj_args_args; eauto.
+        eapply occurs_free_proj_args_args; eauto; try (rewrite length_map; eassumption).
       + intros rho2' Hext Hwf2' m v1 v2 Hlt Hv.
         eapply IH; [ lia | eassumption | solve_K |].
         eapply (G_set cenv VT_arS); [| exact Hv ].
@@ -1245,7 +1381,7 @@ Section AR_rel.
         * apply occurs_free_Eapp. now right.
         * intros Hc. eapply H6. constructor; [ exact Hc | now left ].
       + eapply Forall2_var_rel_In. intros y Hy. eapply (G_var_rel cenv VT_arS); eauto.
-        eapply occurs_free_proj_args_args; eauto.
+        eapply occurs_free_proj_args_args; eauto; try (rewrite length_map; eassumption).
         intros z Hz. apply occurs_free_Eapp. now left.
     - (* Efun *)
       eapply (E_fun_compat cenv VT_arS); eauto.
@@ -1257,7 +1393,7 @@ Section AR_rel.
         intros z [Hz Hn]. destruct Hz as [z Hz | z Hz]; [ exact Hz |].
         exfalso; apply Hn.
         match goal with
-        | [ HB : trans_fundefs _ _ _ _ |- _ ] => apply (proj2 (trans_fundefs_names _ _ _ _ HB z)); exact Hz
+        | [ HB : trans_fundefs _ _ _ _ _ |- _ ] => apply (proj2 (trans_fundefs_names _ _ _ _ _ HB z)); exact Hz
         end.
       + eapply HG.
       + eapply HG.
@@ -1277,7 +1413,7 @@ Section AR_rel.
   (** ** Top level *)
 
   Lemma E_top_ar e e' :
-    trans La (M.empty _) e e' -> E_top cenv VT_arS P PG e e'.
+    trans F La (M.empty _) e e' -> E_top cenv VT_arS P PG e e'.
   Proof.
     intros Htrans k rho1 rho2 [HG _] Hbind. eapply fundamental; eauto.
     - eapply K_inv_empty.
@@ -1286,7 +1422,7 @@ Section AR_rel.
 
   (** Arity raising is in the λweb relation. *)
   Theorem E_web_ar e e' :
-    trans La (M.empty _) e e' -> E_web cenv P PG e e'.
+    trans F La (M.empty _) e e' -> E_web cenv P PG e e'.
   Proof.
     intros Htrans. exact (E_top_E_web cenv VT_arS P PG e e' (E_top_ar e e' Htrans)).
   Qed.

@@ -145,6 +145,36 @@ Section Compat.
         * eapply R_mono; eauto. fuel_arith.
   Qed.
 
+  (** The same, where the body also knows the projected constructor *)
+  Lemma E_proj_compat_src ex k rho1 rho2 x x' w t n y1 y2 e1 e2
+        (Hcompat : post_proj_compat' x w t n y1 e1 rho1 x' w t n y2 e2 rho2 P1 P2)
+        (HOOT : post_OOT' (Eproj x w t n y1 e1) rho1 (Eproj x' w t n y2 e2) rho2 P2) :
+    var_rel k rho1 rho2 y1 y2 ->
+    (forall m v1 v2,
+        m < k ->
+        (exists vs, M.get y1 rho1 = Some (Vconstr w t vs) /\ nthN vs n = Some v1) ->
+        V m v1 v2 ->
+        E P1 ex m (e1, M.set x v1 rho1) (e2, M.set x' v2 rho2)) ->
+    E P2 ex k (Eproj x w t n y1 e1, rho1) (Eproj x' w t n y2 e2, rho2).
+  Proof.
+    intros Hy Hk r1 cin cout Hleq Hstep. inv Hstep.
+    - exists OOT, cin, <0>. split; [ constructor; eassumption |].
+      split; [ eapply HOOT; eassumption | exact I ].
+    - inv H.
+      edestruct Hy as (v2 & Hget2 & Hv); eauto.
+      edestruct V_Vconstr_l as (vs2 & Heq & Hvs); eauto. subst.
+      match goal with [ Hn : nthN _ _ = Some _ |- _ ] => destruct (Forall2_nthN _ _ _ _ _ Hvs Hn) as (v2' & Hnth2 & Hv') end.
+      edestruct (Hk (k - 1)) as (r2 & cin' & cout' & Hstep2 & Hpost & HR);
+        [ fuel_arith | eauto | | | eassumption | ].
+      + eapply V_mono; eauto. lia.
+      + fuel_arith.
+      + do 3 eexists. split; [| split ].
+        * econstructor 2; [ econstructor; eauto |].
+          eapply R_exposed_ex; eauto.
+        * eapply Hcompat; eauto.
+        * eapply R_mono; eauto. fuel_arith.
+  Qed.
+
   (** * Case analysis *)
 
   Lemma E_case_nil_compat ex k rho1 rho2 x1 x2 w
