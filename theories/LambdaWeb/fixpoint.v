@@ -4,17 +4,20 @@
 
    A problem is a list of constraints [k ⊒ t] over a join semi-lattice
    [(A, bot, join)], where [k] is a key and [t] is a constant or the value
-   of a key.  The solver computes the least solution by round-robin
-   iteration: it applies every constraint in turn ([round]), and repeats
-   until a round changes nothing.
+   of a key.  The solver computes the least solution with a worklist: it
+   applies the constraints of the worklist in turn ([step]), and when the
+   value of a key rises, adds the constraints that read that key.
 
    Correctness ([solve_correct]): if [eqb] decides equality, [join] is a
    join semi-lattice with least element [bot], and its height is at most
    [h], then [solve h cs] returns [Some s], and [s] is the least map
-   satisfying every constraint of [cs].  A round that changes the map
-   raises the value of the target of a constraint, which can happen at most
-   [h] times per target, so at most [h * length cs] rounds change the map,
-   and the fuel suffices.  The passes do not rely on this theorem, as they
+   satisfying every constraint of [cs].  Every constraint is satisfied or
+   in the worklist; a step either removes a constraint from the worklist, or
+   raises the value of a target, which can happen at most [h] times per
+   target, and adds at most [length cs] constraints, so the number of steps
+   is less than [n + n * h * n] for [n] constraints.  The solver runs up to
+   [2 ^ k] steps for a [k] logarithmic in this bound, without computing it
+   (natural numbers are unary).  The passes do not rely on this theorem, as they
    check the results of their analyses, but it shows the analyses never
    fail and compute least solutions.
 
@@ -38,7 +41,7 @@
    parameters, and exposed webs, are not transformed: their positions are
    live and unknown. *)
 
-From Stdlib Require Import NArith.BinNat Lists.List Bool.
+From Stdlib Require Import NArith.BinNat Lists.List Bool ArithRing.
 Require Import compcert.lib.Coqlib.
 From CertiRocq.LambdaWeb Require Import syntax.
 
@@ -63,28 +66,53 @@ Section Solver.
   Definition eval (s : M.t A) (t : term) : A :=
     match t with Const a => a | Look k => get s k end.
 
-  (** Apply a constraint; the flag records a change *)
-  Definition update (sc : M.t A * bool) (c : constr) : M.t A * bool :=
-    let '(s, ch) := sc in
+  (** The constraints that read each key *)
+  Definition dget (d : M.t (list constr)) (k : positive) : list constr :=
+    match d ! k with Some l => l | None => [] end.
+
+  Definition add_dep (d : M.t (list constr)) (c : constr) : M.t (list constr) :=
+    match snd c with Look k => M.set k (c :: dget d k) d | Const _ => d end.
+
+  Definition deps (cs : list constr) : M.t (list constr) := fold_left add_dep cs (M.empty _).
+
+  (** Apply a constraint; if its target changes, the constraints that read
+      the target are to be applied again *)
+  Definition step (d : M.t (list constr)) (s : M.t A) (c : constr) : M.t A * list constr :=
     let '(k, t) := c in
     let old := get s k in
     let nw := join old (eval s t) in
-    if eqb nw old then (s, ch) else (M.set k nw s, true).
+    if eqb nw old then (s, []) else (M.set k nw s, dget d k).
 
-  Definition round (cs : list constr) (s : M.t A) : M.t A * bool :=
-    fold_left update cs (s, false).
+  Inductive res : Type :=
+  | Done (s : M.t A)
+  | More (wl : list constr) (s : M.t A).
 
-  Fixpoint iterate (fuel : nat) (cs : list constr) (s : M.t A) : option (M.t A) :=
-    match fuel with
-    | O => None
-    | S fuel =>
-        let '(s', ch) := round cs s in
-        if ch then iterate fuel cs s' else Some s'
+  (** One step *)
+  Definition step1 (d : M.t (list constr)) (wl : list constr) (s : M.t A) : res :=
+    match wl with
+    | [] => Done s
+    | c :: wl => let '(s', nw) := step d s c in More (nw ++ wl) s'
     end.
 
-  (** [h]: the height of the lattice *)
+  (** At most [2 ^ k] steps *)
+  Fixpoint loop (k : nat) (d : M.t (list constr)) (wl : list constr) (s : M.t A) : res :=
+    match k with
+    | O => step1 d wl s
+    | S k =>
+        match loop k d wl s with
+        | Done s => Done s
+        | More wl s => loop k d wl s
+        end
+    end.
+
+  (** [h]: the height of the lattice.  [2 ^ (2 * m + h + 1)], with
+      [n < 2 ^ m], exceeds the number of steps. *)
   Definition solve (h : nat) (cs : list constr) : option (M.t A) :=
-    iterate (S (h * length cs)) cs (M.empty A).
+    let m := S (Nat.log2 (length cs)) in
+    match loop (2 * m + h + 1) (deps cs) cs (M.empty A) with
+    | Done s => Some s
+    | More _ _ => None
+    end.
 
 End Solver.
 
@@ -161,60 +189,6 @@ Section SolverCorrect.
   Lemma get_set s k k' a : get bot (M.set k a s) k' = if Pos.eq_dec k' k then a else get bot s k'.
   Proof. unfold get. rewrite M.gsspec. destruct (peq k' k); destruct (Pos.eq_dec k' k); congruence. Qed.
 
-  (** An update only raises the map *)
-  Lemma update_grow s ch c : below s (fst (update bot join eqb (s, ch) c)).
-  Proof.
-    destruct c as [k t]. unfold update. destruct eqb; simpl. apply below_refl.
-    intros k'. rewrite get_set. destruct Pos.eq_dec; subst. apply le_join_l. apply le_refl.
-  Qed.
-
-  (** An update stays below every solution *)
-  Lemma update_below cs s ch c σ :
-    solution cs σ -> In c cs -> below s σ -> below (fst (update bot join eqb (s, ch) c)) σ.
-  Proof.
-    intros Hσ Hc Hs. destruct c as [k t]. unfold update. destruct eqb; simpl. auto.
-    intros k'. rewrite get_set. destruct Pos.eq_dec; subst; auto.
-    apply join_lub. auto. eapply le_trans. apply eval_mono; eauto. apply (Hσ _ Hc).
-  Qed.
-
-  Lemma fold_below cs cs0 s ch σ :
-    solution cs σ -> incl cs0 cs -> below s σ ->
-    below (fst (fold_left (update bot join eqb) cs0 (s, ch))) σ.
-  Proof.
-    intros Hσ. revert s ch. induction cs0 as [|c cs0 IH]; intros s ch Hi Hs; cbn [fold_left]. auto.
-    destruct (update bot join eqb (s, ch) c) as [s1 ch1] eqn:E.
-    apply IH. eapply incl_cons_inv; eauto.
-    replace s1 with (fst (update bot join eqb (s, ch) c)) by (rewrite E; reflexivity).
-    eapply update_below; eauto. apply Hi. left. reflexivity.
-  Qed.
-
-  Lemma update_eq s ch k t :
-    update bot join eqb (s, ch) (k, t) =
-    if eqb (join (get bot s k) (eval bot s t)) (get bot s k) then (s, ch)
-    else (M.set k (join (get bot s k) (eval bot s t)) s, true).
-  Proof. reflexivity. Qed.
-
-  Lemma fold_true cs s : snd (fold_left (update bot join eqb) cs (s, true)) = true.
-  Proof.
-    revert s. induction cs as [|[k t] cs IH]; intros s; simpl. reflexivity.
-    destruct eqb; apply IH.
-  Qed.
-
-  (** A round that changes nothing ends at a solution *)
-  Lemma fold_false cs0 s ch s' :
-    fold_left (update bot join eqb) cs0 (s, ch) = (s', false) ->
-    s' = s /\ ch = false /\ solution cs0 s.
-  Proof.
-    revert s ch. induction cs0 as [|[k t] cs0 IH]; intros s ch H; cbn [fold_left] in H; rewrite ?update_eq in H.
-    - inv H. split; [|split]; auto. intros c [].
-    - destruct (eqb (join (get bot s k) (eval bot s t)) (get bot s k)) eqn:E.
-      + apply IH in H. destruct H as (-> & -> & Hs). split; [|split]; auto.
-        intros c [<- | Hc]; auto. apply eqb_spec in E. unfold sat, le; simpl.
-        rewrite join_comm. exact E.
-      + assert (Ht : snd (s', false) = true) by (rewrite <- H; apply fold_true).
-        discriminate.
-  Qed.
-
   (** The potential of a map: the sum of the ranks of the targets *)
   Fixpoint pot (s : M.t A) (ks : list positive) : nat :=
     match ks with
@@ -237,57 +211,198 @@ Section SolverCorrect.
     - specialize (IH Hk Hr). specialize (rank_mono _ _ (H k')). lia.
   Qed.
 
-  (** A round that changes the map raises the rank of a target *)
-  Lemma fold_change cs0 s ch s' ch' :
-    fold_left (update bot join eqb) cs0 (s, ch) = (s', ch') ->
-    below s s' /\
-    (ch' = true -> ch = true \/ exists k, In k (map fst cs0) /\ rank (get bot s k) < rank (get bot s' k)).
+  (** ** The dependencies *)
+
+  Lemma dget_add_dep (d : M.t (list (constr A))) c k :
+    dget (add_dep d c) k = if (match snd c with Look k' => Pos.eqb k k' | Const _ => false end)
+                           then c :: dget d k else dget d k.
   Proof.
-    revert s ch. induction cs0 as [|[k t] cs0 IH]; intros s ch H; cbn [fold_left] in H; rewrite ?update_eq in H.
-    - inv H. split. apply below_refl. auto.
-    - destruct (eqb (join (get bot s k) (eval bot s t)) (get bot s k)) eqn:E.
-      + apply IH in H. destruct H as [Hb Hc]. split; auto.
-        intros Hch. destruct (Hc Hch) as [? | (k' & Hk' & Hr)]; auto.
-        right. exists k'. split; auto. right. auto.
-      + change (fold_left (update bot join eqb) cs0 (M.set k (join (get bot s k) (eval bot s t)) s, true) = (s', ch')) in H.
-        set (s1 := M.set k (join (get bot s k) (eval bot s t)) s) in H.
-        assert (Hs1 : below s s1).
-        { replace s1 with (fst (update bot join eqb (s, ch) (k, t))) by (simpl; rewrite E; reflexivity).
-          apply update_grow. }
-        apply IH in H. destruct H as [Hb _]. split. eapply below_trans; eauto.
-        intros _. right. exists k. split. left. reflexivity.
-        assert (Hne : get bot s k <> join (get bot s k) (eval bot s t)).
-        { intros Heq. rewrite <- Heq in E. rewrite (proj2 (eqb_spec _ _) eq_refl) in E. discriminate. }
-        pose proof (rank_lt _ _ (le_join_l (get bot s k) (eval bot s t)) Hne).
-        specialize (rank_mono _ _ (Hb k)). unfold s1. rewrite get_set.
-        destruct Pos.eq_dec; [|congruence]. lia.
+    unfold add_dep. destruct c as [k0 [a | k']]; simpl; [ reflexivity |].
+    unfold dget at 1. rewrite M.gsspec. destruct (peq k k') as [-> | Hn].
+    - rewrite Pos.eqb_refl. reflexivity.
+    - apply Pos.eqb_neq in Hn. rewrite Hn. reflexivity.
   Qed.
 
-  Lemma iterate_correct cs fuel s :
-    h * length cs < pot s (map fst cs) + fuel ->
-    (forall σ, solution cs σ -> below s σ) ->
-    exists s', iterate bot join eqb fuel cs s = Some s' /\ solution cs s' /\
-               forall σ, solution cs σ -> below s' σ.
+  Lemma fold_deps_keep (cs : list (constr A)) (d : M.t (list (constr A))) k c : In c (dget d k) -> In c (dget (fold_left add_dep cs d) k).
   Proof.
-    revert s. induction fuel as [|fuel IH]; intros s Hf Hs; simpl.
-    - specialize (pot_bound s (map fst cs)). rewrite length_map. lia.
-    - unfold round. destruct (fold_left (update bot join eqb) cs (s, false)) as [s' ch] eqn:E.
-      destruct ch.
-      + apply IH.
-        * apply fold_change in E. destruct E as [Hb Hc].
-          destruct (Hc eq_refl) as [? | (k & Hk & Hr)]; [discriminate|].
-          specialize (pot_lt _ _ _ _ Hb Hk Hr). lia.
-        * intros σ Hσ. replace s' with (fst (fold_left (update bot join eqb) cs (s, false))) by (rewrite E; reflexivity).
-          apply fold_below with cs; auto. apply incl_refl.
-      + apply fold_false in E. destruct E as (-> & _ & Hsol). eauto.
+    revert d. induction cs as [| c' cs IH]; intros d H; simpl; [ exact H |].
+    apply IH. rewrite dget_add_dep. destruct (match snd c' with Look k' => Pos.eqb k k' | Const _ => false end);
+      [ right |]; exact H.
   Qed.
+
+  Lemma fold_deps_complete (cs : list (constr A)) (d : M.t (list (constr A))) k c : In c cs -> snd c = Look k -> In c (dget (fold_left add_dep cs d) k).
+  Proof.
+    revert d. induction cs as [| c' cs IH]; intros d Hc Hk; simpl; [ destruct Hc |].
+    destruct Hc as [<- | Hc]; [| eauto ].
+    apply fold_deps_keep. rewrite dget_add_dep, Hk, Pos.eqb_refl. left. reflexivity.
+  Qed.
+
+  Lemma fold_deps_sound (cs : list (constr A)) (d : M.t (list (constr A))) k c :
+    In c (dget (fold_left add_dep cs d) k) -> In c (dget d k) \/ In c cs.
+  Proof.
+    revert d. induction cs as [| c' cs IH]; intros d H; simpl in *; [ left; exact H |].
+    destruct (IH _ H) as [H' | H']; [| right; right; exact H' ].
+    rewrite dget_add_dep in H'. destruct (match snd c' with Look k' => Pos.eqb k k' | Const _ => false end).
+    - destruct H' as [<- | H']; [ right; left; reflexivity | left; exact H' ].
+    - left. exact H'.
+  Qed.
+
+  Lemma fold_deps_length (cs : list (constr A)) (d : M.t (list (constr A))) k : length (dget (fold_left add_dep cs d) k) <= length (dget d k) + length cs.
+  Proof.
+    revert d. induction cs as [| c' cs IH]; intros d; simpl; [ lia |].
+    specialize (IH (add_dep d c')). rewrite dget_add_dep in IH.
+    destruct (match snd c' with Look k' => Pos.eqb k k' | Const _ => false end); simpl in IH; lia.
+  Qed.
+
+  Lemma dget_empty k : dget (M.empty (list (constr A))) k = [].
+  Proof. unfold dget. rewrite M.gempty. reflexivity. Qed.
+
+  (** ** The worklist *)
+
+  Lemma sub_lt_aux (a b n : nat) : a < b -> b <= n -> n - b + 1 <= n - a.
+  Proof. lia. Qed.
+
+  Lemma eval_set s k a t :
+    eval bot (M.set k a s) t = match t with Look k' => if Pos.eq_dec k' k then a else get bot s k' | Const b => b end.
+  Proof. destruct t; simpl; [ reflexivity | apply get_set ]. Qed.
+
+  Section Work.
+
+    Variable (cs : list (constr A)).
+
+    Let d := deps cs.
+    Let L := length cs.
+
+    Lemma deps_complete k c : In c cs -> snd c = Look k -> In c (dget d k).
+    Proof. intros. eapply fold_deps_complete; eauto. Qed.
+
+    Lemma deps_sound k c : In c (dget d k) -> In c cs.
+    Proof. intros H. destruct (fold_deps_sound _ _ _ _ H) as [H' | H']; [ rewrite dget_empty in H'; destruct H' | exact H' ]. Qed.
+
+    Lemma deps_length k : length (dget d k) <= L.
+    Proof. unfold d, deps. pose proof (fold_deps_length cs (M.empty _) k). rewrite dget_empty in H. simpl in H. unfold L. lia. Qed.
+
+    Definition inv (wl : list (constr A)) (s : M.t A) : Prop :=
+      incl wl cs /\
+      (forall c, In c cs -> sat s c \/ In c wl) /\
+      (forall σ, solution cs σ -> below s σ).
+
+    Definition meas (wl : list (constr A)) (s : M.t A) : nat :=
+      length wl + L * (h * L - pot s (map fst cs)).
+
+    Lemma step1_correct wl s :
+      inv wl s ->
+      (wl = [] /\ step1 bot join eqb d wl s = Done s /\ solution cs s) \/
+      (exists wl' s', step1 bot join eqb d wl s = More wl' s' /\ inv wl' s' /\ meas wl' s' < meas wl s).
+    Proof.
+      intros (Hincl & Hsat & Hbel).
+      destruct wl as [| c wl]; simpl.
+      - left. split; [ reflexivity | split; [ reflexivity |] ].
+        intros c Hc. destruct (Hsat c Hc) as [H | []]. exact H.
+      - right. assert (Hc : In c cs) by (apply Hincl; left; reflexivity).
+        destruct c as [k t]. unfold step.
+        destruct (eqb (join (get bot s k) (eval bot s t)) (get bot s k)) eqn:E.
+        + (* no change: the constraint holds *)
+          do 2 eexists. split; [ reflexivity |]. split; [ split; [| split ] |].
+          * simpl. eapply incl_cons_inv; eauto.
+          * intros c' Hc'. destruct (Hsat c' Hc') as [H | [<- | H]]; auto.
+            left. apply eqb_spec in E. unfold sat, le; simpl. rewrite join_comm. exact E.
+          * exact Hbel.
+          * unfold meas. simpl. lia.
+        + set (nw := join (get bot s k) (eval bot s t)). set (s1 := M.set k nw s).
+          assert (Hne : get bot s k <> nw).
+          { intros Heq. unfold nw in Heq. rewrite <- Heq in E. rewrite (proj2 (eqb_spec _ _) eq_refl) in E. discriminate. }
+          assert (Hgrow : below s s1).
+          { intros k'. unfold s1. rewrite get_set. destruct Pos.eq_dec; subst; [ apply le_join_l | apply le_refl ]. }
+          assert (Hk1 : get bot s1 k = nw) by (unfold s1; rewrite get_set; destruct Pos.eq_dec; congruence).
+          assert (Hpot : pot s (map fst cs) < pot s1 (map fst cs)).
+          { eapply pot_lt; [ exact Hgrow | apply (in_map fst _ _ Hc) |]. cbn [fst]. rewrite Hk1.
+            apply rank_lt; [ apply le_join_l | exact Hne ]. }
+          pose proof (pot_bound s1 (map fst cs)) as Hb. rewrite length_map in Hb.
+          pose proof (deps_length k) as Hdl.
+          do 2 eexists. split; [ reflexivity |]. split; [ split; [| split ] |].
+          * intros c' Hc'. apply in_app_or in Hc' as [Hc' | Hc']; [ eapply deps_sound; eauto | apply Hincl; right; exact Hc' ].
+          * intros c' Hc'. destruct (Hsat c' Hc') as [H | [<- | H]].
+            -- destruct c' as [k' t']. unfold sat in *; simpl in *.
+               destruct t' as [a | k''].
+               ++ left. simpl in *. eapply le_trans; [ exact H | apply Hgrow ].
+               ++ destruct (Pos.eq_dec k'' k) as [-> | Hn].
+                  ** right. apply in_or_app. left. eapply deps_complete; [ exact Hc' | reflexivity ].
+                  ** left. simpl in *. unfold s1 at 1. rewrite get_set. destruct Pos.eq_dec; [ congruence |].
+                     eapply le_trans; [ exact H | apply Hgrow ].
+            -- left. unfold sat; simpl. rewrite Hk1. unfold s1. rewrite eval_set.
+               destruct t as [a | k'']; [ apply le_join_r |].
+               destruct Pos.eq_dec; [ apply le_refl | apply le_join_r ].
+            -- right. apply in_or_app. right. exact H.
+          * intros σ Hσ k'. unfold s1. rewrite get_set. destruct Pos.eq_dec; [ subst | apply Hbel; exact Hσ ].
+            apply join_lub; [ apply Hbel; exact Hσ |].
+            eapply le_trans; [ apply eval_mono; apply Hbel; exact Hσ | apply (Hσ _ Hc) ].
+          * unfold meas. rewrite length_app. simpl. unfold L in *.
+            assert (Hm : length cs * (h * length cs - pot s1 (map fst cs) + 1) <= length cs * (h * length cs - pot s (map fst cs)))
+              by (apply Nat.mul_le_mono_l; apply sub_lt_aux; assumption).
+            rewrite Nat.mul_add_distr_l, Nat.mul_1_r in Hm. revert Hm Hdl.
+            generalize (length cs * (h * length cs - pot s1 (map fst cs))), (length cs * (h * length cs - pot s (map fst cs))).
+            intros. lia.
+    Qed.
+
+    Lemma loop_correct k wl s :
+      inv wl s ->
+      (exists s', loop bot join eqb k d wl s = Done s' /\ solution cs s' /\ forall σ, solution cs σ -> below s' σ) \/
+      (exists wl' s', loop bot join eqb k d wl s = More wl' s' /\ inv wl' s' /\ meas wl' s' + 2 ^ k <= meas wl s).
+    Proof.
+      revert wl s. induction k as [| k IH]; intros wl s Hinv; simpl.
+      - destruct (step1_correct wl s Hinv) as [(_ & -> & Hsol) | (wl' & s' & -> & Hinv' & Hm)].
+        + left. exists s. split; [ reflexivity | split; [ exact Hsol | apply Hinv ] ].
+        + right. exists wl', s'. split; [ reflexivity | split; [ exact Hinv' | lia ] ].
+      - destruct (IH wl s Hinv) as [(s' & -> & H) | (wl1 & s1 & -> & Hinv1 & Hm1)].
+        + left. exists s'. split; [ reflexivity | exact H ].
+        + destruct (IH wl1 s1 Hinv1) as [(s' & -> & H) | (wl2 & s2 & -> & Hinv2 & Hm2)].
+          * left. exists s'. split; [ reflexivity | exact H ].
+          * right. exists wl2, s2. split; [ reflexivity | split; [ exact Hinv2 | lia ] ].
+    Qed.
+
+  End Work.
 
   (** The solver returns the least solution *)
+  Lemma contra_aux (a b c y z p : nat) : a + b + p <= c + y -> y <= z -> c + z < p -> False.
+  Proof. lia. Qed.
+
+  Lemma pow_bound (n h0 : nat) :
+    n + n * (h0 * n) < 2 ^ (2 * S (Nat.log2 n) + h0 + 1).
+  Proof.
+    set (m := S (Nat.log2 n)).
+    assert (Hn : n < 2 ^ m).
+    { destruct n as [| n]; [ simpl; lia |]. apply Nat.log2_spec. lia. }
+    assert (Hh : h0 < 2 ^ h0) by (apply Nat.pow_gt_lin_r; lia).
+    replace (2 * m + h0 + 1) with (m + m + h0 + 1) by lia.
+    rewrite !Nat.pow_add_r. simpl (2 ^ 1).
+    revert Hn Hh. generalize (2 ^ m), (2 ^ h0). intros a b Hn Hh.
+    assert (H1 : n * n <= a * a) by (apply Nat.mul_le_mono; lia).
+    assert (H2 : h0 * (n * n) <= h0 * (a * a)) by (apply Nat.mul_le_mono_l; exact H1).
+    assert (H3 : h0 * (a * a) < b * (a * a)) by (apply Nat.mul_lt_mono_pos_r; nia).
+    assert (H4 : a <= a * a * b) by nia.
+    replace (n * (h0 * n)) with (h0 * (n * n)) by ring.
+    replace (a * a * b * 2) with (a * a * b + b * (a * a)) by ring.
+    lia.
+  Qed.
+
   Theorem solve_correct cs :
     exists s, solve bot join eqb h cs = Some s /\ solution cs s /\
               forall σ, solution cs σ -> below s σ.
   Proof.
-    apply iterate_correct. unfold solve. eapply Nat.lt_le_trans; [apply Nat.lt_succ_diag_r | apply Nat.le_add_l]. intros σ _ k. unfold get at 1. rewrite M.gempty. apply le_bot.
+    unfold solve.
+    assert (Hinv : inv cs cs (M.empty A)).
+    { split; [ apply incl_refl | split ].
+      - intros c Hc. right. exact Hc.
+      - intros σ _ k. unfold get at 1. rewrite M.gempty. apply le_bot. }
+    destruct (loop_correct cs (2 * S (Nat.log2 (length cs)) + h + 1) cs (M.empty A) Hinv)
+      as [(s & -> & H) | (wl & s & _ & _ & Hm)].
+    - exists s. split; [ reflexivity | exact H ].
+    - exfalso. unfold meas in Hm.
+      pose proof (pow_bound (length cs) h) as Hp.
+      assert (Hle : length cs * (h * length cs - pot (M.empty A) (map fst cs)) <= length cs * (h * length cs))
+        by (apply Nat.mul_le_mono_l; lia).
+      eapply contra_aux; [ exact Hm | exact Hle | exact Hp ].
   Qed.
 
 End SolverCorrect.

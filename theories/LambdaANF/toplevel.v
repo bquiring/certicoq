@@ -230,17 +230,17 @@ Section IDENT.
   (** Web optimizations: hoist the closed functions, annotate the program
       with webs by the 0-CFA, defunctionalize, run the other λweb passes, and
       erase the webs, with fresh function tags for the internal webs. *)
-  Definition web_trans (cenv : ctor_env) : anf_trans :=
+  Definition web_trans_gen (dfn : bool) (cenv : ctor_env) : anf_trans :=
     fun e c =>
       let 'mkCompData nv nc ni nf _ fenv names imap log := c in
       let e_in := e in
-      let e := LambdaWeb.hoist.hoist e in
+      let e := if dfn then LambdaWeb.hoist.hoist e else e in
       let w_con := LambdaWeb.syntax.Exposed 1%positive in
       let '(sl, _) := LambdaCFA.fast.analyze_fast w_con e in
       let fallback := match LambdaCFA.spec.s_ex sl with LambdaCFA.spec.AAll => true | _ => false end in
       let e0 := LambdaCFA.impl.anno w_con sl e in
       let dmsg := dfn_stats cenv e0 in
-      let '(cenv', ed0) := LambdaWeb.dfn_impl.dfn_top cenv e0 in
+      let '(cenv', ed0) := if dfn then LambdaWeb.dfn_impl.dfn_top cenv e0 else (cenv, e0) in
       (* remove the functions left dead, before arity raising *)
       let ed := LambdaWeb.dpe_impl.dpe_top ed0 in
       let ndfn := (N.of_nat (length (M.elements cenv')) - N.of_nat (length (M.elements cenv)))%N in
@@ -285,7 +285,7 @@ Section IDENT.
                   | Lc :: _ => (nw Lc ++ " " ++ bs (LambdaWeb.cp_impl.cp_ok Lc (M.empty _) e1))%bs
                   | [] => "no solution"%bs end in
       let dpe_f := match LambdaWeb.fixpoint.live_masks ea with
-                   | Some L => bs (LambdaWeb.dpe_impl.mchk L ea)
+                   | Some L => bs (snd (LambdaWeb.dpe_impl.dpe_fv L ea))
                    | None => "no solution"%bs end in
       let pp (a b : LambdaWeb.stats.stats) :=
         ("parameters " ++ show_N (LambdaWeb.stats.n_param a) ++ " -> " ++ show_N (LambdaWeb.stats.n_param b) ++
@@ -321,6 +321,14 @@ Section IDENT.
         web_note msg (freshen.freshen_top e' (mkCompData nv' nc' ni' nf' cenv' fenv' names imap log))
       else (Ret e_in, c).
 
+  Definition web_trans (cenv : ctor_env) : anf_trans := web_trans_gen true cenv.
+
+  (** Before lambda lifting: no hoisting and no defunctionalization, which
+      needs lifted functions.  Arity raising, DPE and CP see the source
+      functions, before lambda lifting turns their free variables into
+      parameters that receive projected fields of closure records. *)
+  Definition web_trans_pre (cenv : ctor_env) : anf_trans := web_trans_gen false cenv.
+
   Section Pipeline.
 
     Context (anf_opts : anf_options).
@@ -345,6 +353,9 @@ Section IDENT.
          functions are not global, so the code that uses one as a value
          takes it as an argument, and its wrapper stays in place; and no
          shrinking follows, which would inline the code into the wrappers. *)
+      e <- (if webs anf_opts then
+              time_anf "Web optimizations before lifting" (web_trans_pre cenv0) e
+            else id_trans e) ;;
       e <- (if (do_lambda_lift anf_opts) then
               time_anf "Lambda lift" (lambda_lift (args anf_opts) (no_push anf_opts) (inl_wrappers anf_opts) (negb (webs anf_opts))) e
             else id_trans e) ;;

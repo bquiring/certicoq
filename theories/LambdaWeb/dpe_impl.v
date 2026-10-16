@@ -2,15 +2,18 @@
    it inhabits the relation of dpe.v.
 
    - The analysis is the liveness fixpoint of [fixpoint.v]: a parameter is
-     dead if it is only passed on to dead positions.  The simpler [masks]
-     (a parameter is live if it occurs free in the body) is the fallback.
-     A checker validates the masks: the dead parameters of a function must
-     not occur in its transformed body.
+     dead if it is only passed on to dead positions.  A checker validates
+     the masks: the dead parameters of a function must not occur in its
+     transformed body.
    - The transformation [dpe] drops the dead parameters of the functions of
      the webs in the map and the corresponding arguments of their calls, and
      drops the [Econstr], [Eproj] and [Efun] bindings whose variables are
      dead in the transformed continuation.
-   - The budget of removed bindings is the size of the program. *)
+   - The budget of removed bindings is the size of the program.
+   - [dpe] and the checker [mchk] are the reference; [dpe_fv] computes
+     both, with the free variables of the result, in one pass, and is the
+     one that runs (asking for the free variables of each continuation is
+     quadratic). *)
 
 From Stdlib Require Import NArith.BinNat ZArith.ZArith Lists.List Sets.Ensembles Bool
      micromega.Lia Relations.Relations.
@@ -71,50 +74,6 @@ with fsize (B : fundefs) : nat :=
   | Fcons _ _ _ e B => S (esize e + fsize B)
   | Fnil => 0
   end.
-
-(** * The analysis *)
-
-(** [None]: the functions of the web disagree on their arity *)
-Definition entry : Type := option (list bool).
-
-Fixpoint join_bool (bs1 bs2 : list bool) : list bool :=
-  match bs1, bs2 with
-  | b1 :: bs1, b2 :: bs2 => orb b1 b2 :: join_bool bs1 bs2
-  | _, _ => []
-  end.
-
-Definition add_mask (w : web) (m : list bool) (tbl : WM.t entry) : WM.t entry :=
-  match WM.get w tbl with
-  | None => WM.set w (Some m) tbl
-  | Some None => tbl
-  | Some (Some m') =>
-      if Nat.eqb (length m') (length m) then WM.set w (Some (join_bool m' m)) tbl
-      else WM.set w None tbl
-  end.
-
-Fixpoint collect (e : exp) (tbl : WM.t entry) : WM.t entry :=
-  match e with
-  | Econstr _ _ _ _ k | Eproj _ _ _ _ _ k | Eletapp _ _ _ _ k
-  | Eprim_val _ _ k | Eprim _ _ _ k => collect k tbl
-  | Ecase _ _ cl =>
-      (fix go (cl : list (ctor_tag * exp)) tbl :=
-         match cl with
-         | [] => tbl
-         | (_, e) :: cl => go cl (collect e tbl)
-         end) cl tbl
-  | Efun B k => collect k (collect_fd B tbl)
-  | Eapp _ _ _ | Ehalt _ => tbl
-  end
-with collect_fd (B : fundefs) (tbl : WM.t entry) : WM.t entry :=
-  match B with
-  | Fcons f w xs e B =>
-      let tbl := if exposedb w then tbl else add_mask w (map (is_free e) xs) tbl in
-      collect_fd B (collect e tbl)
-  | Fnil => tbl
-  end.
-
-Definition masks (e : exp) : WM.t (list bool) :=
-  M.map_filter1 (fun o : entry => o) (collect e (WM.empty _)).
 
 (** * The transformation *)
 
@@ -326,9 +285,210 @@ Lemma all_funs_true :
   (forall e, all_funs (fun _ _ _ => True) e) /\ (forall B, all_funs_fd (fun _ _ _ => True) B).
 Proof. eapply exp_fundefs_ind; simpl; intros; intuition eauto. Qed.
 
+(** ** The implementation that runs *)
+
+Definition set_of (l : list var) : PS.t := fold_left (fun s x => PS.add x s) l PS.empty.
+
+Lemma set_of_spec l z : PS.In z (set_of l) <-> List.In z l.
+Proof.
+  unfold set_of.
+  assert (H : forall s, PS.In z (fold_left (fun s x => PS.add x s) l s) <-> PS.In z s \/ List.In z l).
+  { induction l as [| x l IH]; intros s; simpl; [ tauto |].
+    rewrite IH, PS.add_spec. split; [ intros [[H | H] | H]; auto | intros [H | [H | H]]; auto ]. }
+  rewrite H. split; [ intros [H1 | H1]; [ apply PS.empty_spec in H1; contradiction | exact H1 ] | right; assumption ].
+Qed.
+
+Lemma forallb_ext' {A} (f g : A -> bool) l : (forall x, f x = g x) -> forallb f l = forallb g l.
+Proof. intros H. induction l; simpl; [ reflexivity | rewrite H, IHl; reflexivity ]. Qed.
+
+Lemma existsb_ext' {A} (f g : A -> bool) l : (forall x, f x = g x) -> existsb f l = existsb g l.
+Proof. intros H. induction l; simpl; [ reflexivity | rewrite H, IHl; reflexivity ]. Qed.
+
+(** [S] is the set [E] *)
+Definition fv_ok (S : PS.t) (E : Ensemble var) : Prop := forall z, PS.In z S <-> E z.
+
+Lemma same_iff (A B : Ensemble var) z : A <--> B -> (A z <-> B z).
+Proof. intros [H1 H2]. split; [ apply H1 | apply H2 ]. Qed.
+
+Lemma Union_iff (A B : Ensemble var) z : (A :|: B) z <-> A z \/ B z.
+Proof. split; [ intros [z' H | z' H]; auto | intros [H | H]; [ left | right ]; exact H ]. Qed.
+
+Lemma Setminus_iff (A B : Ensemble var) z : (A \\ B) z <-> A z /\ ~ B z.
+Proof. split; [ intros [H1 H2]; auto | intros [H1 H2]; constructor; auto ]. Qed.
+
+Lemma Singleton_iff (x z : var) : [set x] z <-> z = x.
+Proof. split; [ intros H; inv H; reflexivity | intros ->; constructor ]. Qed.
+
+Lemma mem_fv S e x : fv_ok S (occurs_free e) -> PS.mem x S = is_free e x.
+Proof.
+  intros H. destruct (PS.mem x S) eqn:E1, (is_free e x) eqn:E2; auto.
+  - apply PS.mem_spec, H, is_free_spec in E1. congruence.
+  - apply is_free_spec, H, PS.mem_spec in E2. congruence.
+Qed.
+
+Section Fv.
+
+  Variable (L : WM.t (list bool)).
+
+  Definition mok_fv (w : web) (xs : list var) (fe : PS.t) : bool :=
+    if exposedb w then true
+    else match WM.get w L with
+         | Some bs => Nat.eqb (length bs) (length xs) && forallb (fun x => negb (PS.mem x fe)) (dead_args xs bs)
+         | None => true
+         end.
+
+  Fixpoint dpe_fv (e : exp) : exp * PS.t * bool :=
+    match e with
+    | Econstr x w t ys k =>
+        let '(k', fk, ok) := dpe_fv k in
+        if PS.mem x fk then (Econstr x w t ys k', PS.union (set_of ys) (PS.remove x fk), ok) else (k', fk, ok)
+    | Eproj x w t n y k =>
+        let '(k', fk, ok) := dpe_fv k in
+        if PS.mem x fk then (Eproj x w t n y k', PS.add y (PS.remove x fk), ok) else (k', fk, ok)
+    | Ecase x w cl =>
+        let '(cl', fs, ok) :=
+          (fix go (cl : list (ctor_tag * exp)) : list (ctor_tag * exp) * PS.t * bool :=
+             match cl with
+             | [] => ([], PS.empty, true)
+             | (c, e) :: cl =>
+                 let '(e', fe, ok1) := dpe_fv e in
+                 let '(cl', fcl, ok2) := go cl in
+                 ((c, e') :: cl', PS.union fe fcl, ok1 && ok2)
+             end) cl in
+        (Ecase x w cl', PS.add x fs, ok)
+    | Eletapp x f w ys k =>
+        let '(k', fk, ok) := dpe_fv k in
+        let ys' := dpe_args L w ys in
+        (Eletapp x f w ys' k', PS.add f (PS.union (set_of ys') (PS.remove x fk)), ok)
+    | Efun B k =>
+        let '(k', fk, ok) := dpe_fv k in
+        let '(B', fB, nB, okB) := dpe_fv_fd B in
+        if existsb (fun f => PS.mem f fk) (bnames B) then (Efun B' k', PS.union fB (PS.diff fk nB), okB && ok)
+        else (k', fk, okB && ok)
+    | Eapp f w ys => let ys' := dpe_args L w ys in (Eapp f w ys', PS.add f (set_of ys'), true)
+    | Eprim_val x p k => let '(k', fk, ok) := dpe_fv k in (Eprim_val x p k', PS.remove x fk, ok)
+    | Eprim x p ys k =>
+        let '(k', fk, ok) := dpe_fv k in (Eprim x p ys k', PS.union (set_of ys) (PS.remove x fk), ok)
+    | Ehalt x => (Ehalt x, PS.singleton x, true)
+    end
+  with dpe_fv_fd (B : fundefs) : fundefs * PS.t * PS.t * bool :=
+    match B with
+    | Fcons f w xs e B =>
+        let '(e', fe, oke) := dpe_fv e in
+        let '(B', fB, nB, okB) := dpe_fv_fd B in
+        let xs' := dpe_args L w xs in
+        (Fcons f w xs' e' B',
+         PS.union (PS.diff fe (PS.add f (PS.union (set_of xs') nB))) (PS.remove f fB),
+         PS.add f nB,
+         mok_fv w xs fe && oke && okB)
+    | Fnil => (Fnil, PS.empty, PS.empty, true)
+    end.
+
+  Lemma mok_fv_eq w xs e fe : fv_ok fe (occurs_free (dpe L e)) -> mok_fv w xs fe = mok L w xs e.
+  Proof.
+    intros H. unfold mok_fv, mok. destruct (exposedb w); [ reflexivity |].
+    destruct (WM.get w L) as [bs |]; [| reflexivity ]. f_equal.
+    apply forallb_ext'. intros x. rewrite (mem_fv _ _ x H). reflexivity.
+  Qed.
+
+  Ltac fv_simpl :=
+    repeat first [ rewrite PS.union_spec | rewrite PS.remove_spec | rewrite PS.add_spec | rewrite PS.diff_spec
+                 | rewrite PS.singleton_spec | rewrite set_of_spec | rewrite Union_iff | rewrite Setminus_iff
+                 | rewrite Singleton_iff ].
+
+  Lemma dpe_fv_correct :
+    (forall e, let '(e', fe, ok) := dpe_fv e in e' = dpe L e /\ fv_ok fe (occurs_free e') /\ ok = mchk L e) /\
+    (forall B, let '(B', fB, nB, ok) := dpe_fv_fd B in
+               B' = dpe_fd L B /\ fv_ok fB (occurs_free_fundefs B') /\ fv_ok nB (name_in_fundefs B') /\
+               ok = mchk_fd L B).
+  Proof.
+    eapply exp_fundefs_ind; simpl.
+    - (* Econstr *)
+      intros x w t ys k IH. destruct (dpe_fv k) as [[k' fk] ok]. destruct IH as (-> & Hf & ->).
+      rewrite (mem_fv _ _ x Hf). destruct (is_free (dpe L k) x); [| auto ].
+      split; [ reflexivity | split; [| reflexivity ] ].
+      intros z. rewrite (same_iff _ _ z (occurs_free_Econstr _ _ _ _ _)). fv_simpl. rewrite (Hf z).
+      unfold FromList, Ensembles.In. tauto.
+    - (* Ecase [] *)
+      intros x w. split; [ reflexivity | split; [| reflexivity ] ].
+      intros z. rewrite (same_iff _ _ z (occurs_free_Ecase_nil _ _)). fv_simpl.
+      split; [ intros [H | H]; [ exact H | apply PS.empty_spec in H; contradiction ] | intros H; left; exact H ].
+    - (* Ecase (_ :: _) *)
+      intros x w cl c e IHe IHcl. simpl in IHcl.
+      destruct (dpe_fv e) as [[e' fe] ok1]. destruct IHe as (-> & Hfe & ->).
+      match type of IHcl with
+      | context [?G cl] =>
+          let T := type of (G cl) in
+          lazymatch T with
+          | (list (ctor_tag * exp) * PS.t * bool)%type => destruct (G cl) as [[cl' fcl] ok2]
+          end
+      end.
+      destruct IHcl as (Hcl & Hfcl & Hok). injection Hcl as Hcl.
+      split; [ rewrite Hcl; reflexivity | split ].
+      + intros z. rewrite (same_iff _ _ z (occurs_free_Ecase_cons _ _ _ _ _)). fv_simpl.
+        rewrite (Hfe z). rewrite <- (Hfcl z). fv_simpl. tauto.
+      + rewrite Hok. reflexivity.
+    - (* Eproj *)
+      intros x w t n y k IH. destruct (dpe_fv k) as [[k' fk] ok]. destruct IH as (-> & Hf & ->).
+      rewrite (mem_fv _ _ x Hf). destruct (is_free (dpe L k) x); [| auto ].
+      split; [ reflexivity | split; [| reflexivity ] ].
+      intros z. rewrite (same_iff _ _ z (occurs_free_Eproj _ _ _ _ _ _)). fv_simpl. rewrite (Hf z). tauto.
+    - (* Eletapp *)
+      intros x f w ys k IH. destruct (dpe_fv k) as [[k' fk] ok]. destruct IH as (-> & Hf & ->).
+      split; [ reflexivity | split; [| reflexivity ] ].
+      intros z. rewrite (same_iff _ _ z (occurs_free_Eletapp _ _ _ _ _)). fv_simpl. rewrite (Hf z).
+      unfold FromList, Ensembles.In. tauto.
+    - (* Efun *)
+      intros B k IHB IHk. destruct (dpe_fv k) as [[k' fk] ok]. destruct IHk as (-> & Hf & ->).
+      destruct (dpe_fv_fd B) as [[[B' fB] nB] okB]. destruct IHB as (-> & HfB & HnB & ->).
+      assert (Hex : existsb (fun f => PS.mem f fk) (bnames B) = existsb (is_free (dpe L k)) (bnames B))
+        by (apply existsb_ext'; intros f; apply mem_fv; exact Hf).
+      rewrite Hex. destruct (existsb (is_free (dpe L k)) (bnames B)).
+      + split; [ reflexivity | split; [| reflexivity ] ].
+        intros z. rewrite (same_iff _ _ z (occurs_free_Efun _ _)). fv_simpl. rewrite (HfB z), (Hf z), (HnB z). tauto.
+      + split; [ reflexivity | split; [ exact Hf | reflexivity ] ].
+    - (* Eapp *)
+      intros f w ys. split; [ reflexivity | split; [| reflexivity ] ].
+      intros z. rewrite (same_iff _ _ z (occurs_free_Eapp _ _ _)). fv_simpl.
+      unfold FromList, Ensembles.In. tauto.
+    - (* Eprim_val *)
+      intros x p k IH. destruct (dpe_fv k) as [[k' fk] ok]. destruct IH as (-> & Hf & ->).
+      split; [ reflexivity | split; [| reflexivity ] ].
+      intros z. rewrite (same_iff _ _ z (occurs_free_Eprim_val _ _ _)). fv_simpl. rewrite (Hf z). tauto.
+    - (* Eprim *)
+      intros x p ys k IH. destruct (dpe_fv k) as [[k' fk] ok]. destruct IH as (-> & Hf & ->).
+      split; [ reflexivity | split; [| reflexivity ] ].
+      intros z. rewrite (same_iff _ _ z (occurs_free_Eprim _ _ _ _)). fv_simpl. rewrite (Hf z).
+      unfold FromList, Ensembles.In. tauto.
+    - (* Ehalt *)
+      intros x. split; [ reflexivity | split; [| reflexivity ] ].
+      intros z. rewrite (same_iff _ _ z (occurs_free_Ehalt _)). fv_simpl. tauto.
+    - (* Fcons *)
+      intros f w xs e B IHe IHB. destruct (dpe_fv e) as [[e' fe] oke]. destruct IHe as (-> & Hfe & ->).
+      destruct (dpe_fv_fd B) as [[[B' fB] nB] okB]. destruct IHB as (-> & HfB & HnB & ->).
+      split; [ reflexivity | split; [| split ] ].
+      + intros z. rewrite (same_iff _ _ z (occurs_free_fundefs_Fcons _ _ _ _ _)). fv_simpl.
+        rewrite (Hfe z), (HfB z), (HnB z). unfold FromList, Ensembles.In. tauto.
+      + intros z. simpl. fv_simpl. rewrite (HnB z). tauto.
+      + rewrite (mok_fv_eq _ _ _ _ Hfe). reflexivity.
+    - (* Fnil *)
+      split; [ reflexivity | split; [| split; [| reflexivity ] ] ].
+      + intros z. rewrite (same_iff _ _ z occurs_free_fundefs_Fnil).
+        split; [ intros H; apply PS.empty_spec in H; contradiction | intros H; inv H ].
+      + intros z. simpl. split; [ intros H; apply PS.empty_spec in H; contradiction | intros H; inv H ].
+  Qed.
+
+  Lemma dpe_fv_fst e : fst (fst (dpe_fv e)) = dpe L e.
+  Proof. pose proof (proj1 dpe_fv_correct e) as H. destruct (dpe_fv e) as [[e' fe] ok]. apply H. Qed.
+
+  Lemma dpe_fv_ok e : snd (dpe_fv e) = mchk L e.
+  Proof. pose proof (proj1 dpe_fv_correct e) as H. destruct (dpe_fv e) as [[e' fe] ok]. apply H. Qed.
+
+End Fv.
+
 Definition choose_masks (e : exp) : WM.t (list bool) :=
-  let cands := match fixpoint.live_masks e with Some L => [L] | None => [] end ++ [masks e] in
-  match find (fun L => mchk L e) cands with
+  let cands := match fixpoint.live_masks e with Some L => [L] | None => [] end in
+  match find (fun L => snd (dpe_fv L e)) cands with
   | Some L => L
   | None => WM.empty _
   end.
@@ -336,19 +496,19 @@ Definition choose_masks (e : exp) : WM.t (list bool) :=
 Lemma choose_masks_ok e : all_funs (mask_ok (choose_masks e)) e.
 Proof.
   unfold choose_masks.
-  destruct (find (fun L => mchk L e) _) eqn:Hf.
-  - eapply find_some in Hf. eapply (proj1 (mchk_spec _)). apply Hf.
+  destruct (find (fun L => snd (dpe_fv L e)) _) eqn:Hf.
+  - eapply find_some in Hf. eapply (proj1 (mchk_spec _)). rewrite <- dpe_fv_ok. apply Hf.
   - assert (Hm : forall w xs e', (fun _ _ _ => True) w xs e' -> mask_ok (WM.empty _) w xs e').
     { intros w xs e' _ bs _ HL. rewrite WM.gempty in HL. discriminate. }
     exact (proj1 (all_funs_mono _ _ Hm) e (proj1 all_funs_true e)).
 Qed.
 
-Definition dpe_top (e : exp) : exp := dpe (choose_masks e) e.
+Definition dpe_top (e : exp) : exp := fst (fst (dpe_fv (choose_masks e) e)).
 
 (** * Correctness of the implementation *)
 
 Theorem dpe_top_trans e : trans (choose_masks e) (esize e) (esize e) e (dpe_top e).
-Proof. eapply dpe_trans; [ eapply choose_masks_ok | lia ]. Qed.
+Proof. unfold dpe_top. rewrite dpe_fv_fst. eapply dpe_trans; [ eapply choose_masks_ok | lia ]. Qed.
 
 Section Top.
 

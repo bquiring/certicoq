@@ -235,6 +235,183 @@ Proof.
            end; eauto.
 Qed.
 
+(** * The implementation that runs
+
+    [cp] asks whether a binder occurs free in its transformed continuation;
+    [cp_fv] computes the transformed expression with its free variables, in
+    one pass. *)
+
+Section CpFv.
+
+  Variable (Lc : WM.t (list (option const_info))).
+
+  Ltac fv_simpl :=
+    repeat first [ rewrite PS.union_spec | rewrite PS.remove_spec | rewrite PS.add_spec | rewrite PS.diff_spec
+                 | rewrite PS.singleton_spec | rewrite set_of_spec | rewrite Union_iff | rewrite Setminus_iff
+                 | rewrite Singleton_iff ].
+
+  Fixpoint bind_fv (xs : list var) (cs : list (option const_info)) (fe : PS.t) : PS.t :=
+    match xs, cs with
+    | x :: xs', Some _ :: cs' => PS.remove x (bind_fv xs' cs' fe)
+    | _ :: xs', None :: cs' => bind_fv xs' cs' fe
+    | _, _ => fe
+    end.
+
+  Lemma bind_fv_spec xs cs e fe :
+    fv_ok fe (occurs_free e) -> fv_ok (bind_fv xs cs fe) (occurs_free (bind_consts xs cs e)).
+  Proof.
+    revert cs. induction xs as [| x xs IH]; intros [| [[c w] |] cs] H; simpl; auto.
+    intros z. rewrite (same_iff _ _ z (occurs_free_Econstr _ _ _ _ _)). fv_simpl. rewrite (IH cs H z).
+    unfold FromList, Ensembles.In. simpl. tauto.
+  Qed.
+
+  Fixpoint cp_fv (K : M.t const_info) (e : exp) : exp * PS.t :=
+    match e with
+    | Econstr x w t ys k =>
+        let '(k', fk) := cp_fv (constr_env K x w t ys) k in
+        if PS.mem x fk then (Econstr x w t ys k', PS.union (set_of ys) (PS.remove x fk)) else (k', fk)
+    | Eproj x w t n y k =>
+        let '(k', fk) := cp_fv (M.remove x K) k in
+        if PS.mem x fk then (Eproj x w t n y k', PS.add y (PS.remove x fk)) else (k', fk)
+    | Ecase x w cl =>
+        let '(cl', fs) :=
+          (fix go (cl : list (ctor_tag * exp)) : list (ctor_tag * exp) * PS.t :=
+             match cl with
+             | [] => ([], PS.empty)
+             | (c, e) :: cl =>
+                 let '(e', fe) := cp_fv K e in
+                 let '(cl', fcl) := go cl in
+                 ((c, e') :: cl', PS.union fe fcl)
+             end) cl in
+        (Ecase x w cl', PS.add x fs)
+    | Eletapp x f w ys k =>
+        let '(k', fk) := cp_fv (M.remove x K) k in
+        let ys' := cp_args Lc w ys in
+        (Eletapp x f w ys' k', PS.add f (PS.union (set_of ys') (PS.remove x fk)))
+    | Efun B k =>
+        let K' := remove_fnames B K in
+        let '(k', fk) := cp_fv K' k in
+        if existsb (fun f => PS.mem f fk) (bnames B) then
+          let '(B', fB, nB) := cp_fv_fd K' B in (Efun B' k', PS.union fB (PS.diff fk nB))
+        else (k', fk)
+    | Eapp f w ys => let ys' := cp_args Lc w ys in (Eapp f w ys', PS.add f (set_of ys'))
+    | Eprim_val x p k => let '(k', fk) := cp_fv (M.remove x K) k in (Eprim_val x p k', PS.remove x fk)
+    | Eprim x p ys k =>
+        let '(k', fk) := cp_fv (M.remove x K) k in (Eprim x p ys k', PS.union (set_of ys) (PS.remove x fk))
+    | Ehalt x => (Ehalt x, PS.singleton x)
+    end
+  with cp_fv_fd (K : M.t const_info) (B : fundefs) : fundefs * PS.t * PS.t :=
+    match B with
+    | Fcons f w xs e B =>
+        let '(B', fB, nB) := cp_fv_fd K B in
+        if keeps (sel_L Lc) w then
+          let '(e', fe) := cp_fv (param_consts xs [] K) e in
+          (Fcons f w xs e' B', PS.union (PS.diff fe (PS.add f (PS.union (set_of xs) nB))) (PS.remove f fB),
+           PS.add f nB)
+        else
+          let cs := cp_cs Lc w in
+          let '(e', fe) := cp_fv (param_consts xs cs K) e in
+          let xs' := live_args xs (cmask cs) in
+          (Fcons f w xs' (bind_consts xs cs e') B',
+           PS.union (PS.diff (bind_fv xs cs fe) (PS.add f (PS.union (set_of xs') nB))) (PS.remove f fB),
+           PS.add f nB)
+    | Fnil => (Fnil, PS.empty, PS.empty)
+    end.
+
+  Lemma cp_fv_correct :
+    (forall e K, let '(e', fe) := cp_fv K e in e' = cp Lc K e /\ fv_ok fe (occurs_free e')) /\
+    (forall B K, let '(B', fB, nB) := cp_fv_fd K B in
+                 B' = cp_fd Lc K B /\ fv_ok fB (occurs_free_fundefs B') /\ fv_ok nB (name_in_fundefs B')).
+  Proof.
+    eapply exp_fundefs_ind; simpl.
+    - (* Econstr *)
+      intros x w t ys k IH K. specialize (IH (constr_env K x w t ys)).
+      destruct (cp_fv _ k) as [k' fk]. destruct IH as (-> & Hf).
+      rewrite (mem_fv _ _ x Hf). destruct (is_free _ x); [| auto ].
+      split; [ reflexivity |]. intros z. rewrite (same_iff _ _ z (occurs_free_Econstr _ _ _ _ _)). fv_simpl.
+      rewrite (Hf z). unfold FromList, Ensembles.In. tauto.
+    - (* Ecase [] *)
+      intros x w K. split; [ reflexivity |].
+      intros z. rewrite (same_iff _ _ z (occurs_free_Ecase_nil _ _)). fv_simpl.
+      split; [ intros [H | H]; [ exact H | apply PS.empty_spec in H; contradiction ] | intros H; left; exact H ].
+    - (* Ecase (_ :: _) *)
+      intros x w cl c e IHe IHcl K. specialize (IHe K). specialize (IHcl K). simpl in IHcl.
+      destruct (cp_fv K e) as [e' fe]. destruct IHe as (-> & Hfe).
+      match type of IHcl with
+      | context [?G cl] =>
+          let T := type of (G cl) in
+          lazymatch T with
+          | (list (ctor_tag * exp) * PS.t)%type => destruct (G cl) as [cl' fcl]
+          end
+      end.
+      destruct IHcl as (Hcl & Hfcl). injection Hcl as Hcl.
+      split; [ rewrite Hcl; reflexivity |].
+      intros z. rewrite (same_iff _ _ z (occurs_free_Ecase_cons _ _ _ _ _)). fv_simpl.
+      rewrite (Hfe z). rewrite <- (Hfcl z). fv_simpl. tauto.
+    - (* Eproj *)
+      intros x w t n y k IH K. specialize (IH (M.remove x K)).
+      destruct (cp_fv _ k) as [k' fk]. destruct IH as (-> & Hf).
+      rewrite (mem_fv _ _ x Hf). destruct (is_free _ x); [| auto ].
+      split; [ reflexivity |]. intros z. rewrite (same_iff _ _ z (occurs_free_Eproj _ _ _ _ _ _)). fv_simpl.
+      rewrite (Hf z). tauto.
+    - (* Eletapp *)
+      intros x f w ys k IH K. specialize (IH (M.remove x K)).
+      destruct (cp_fv _ k) as [k' fk]. destruct IH as (-> & Hf).
+      split; [ reflexivity |]. intros z. rewrite (same_iff _ _ z (occurs_free_Eletapp _ _ _ _ _)). fv_simpl.
+      rewrite (Hf z). unfold FromList, Ensembles.In. tauto.
+    - (* Efun *)
+      intros B k IHB IHk K. specialize (IHk (remove_fnames B K)). specialize (IHB (remove_fnames B K)).
+      destruct (cp_fv _ k) as [k' fk]. destruct IHk as (-> & Hf).
+      assert (Hex : existsb (fun f => PS.mem f fk) (bnames B) = existsb (is_free (cp Lc (remove_fnames B K) k)) (bnames B))
+        by (apply existsb_ext'; intros f; apply mem_fv; exact Hf).
+      rewrite Hex. destruct (existsb (is_free _) (bnames B)); [| split; [ reflexivity | exact Hf ] ].
+      destruct (cp_fv_fd _ B) as [[B' fB] nB]. destruct IHB as (-> & HfB & HnB).
+      split; [ reflexivity |].
+      intros z. rewrite (same_iff _ _ z (occurs_free_Efun _ _)). fv_simpl. rewrite (HfB z), (Hf z), (HnB z). tauto.
+    - (* Eapp *)
+      intros f w ys K. split; [ reflexivity |].
+      intros z. rewrite (same_iff _ _ z (occurs_free_Eapp _ _ _)). fv_simpl.
+      unfold FromList, Ensembles.In. tauto.
+    - (* Eprim_val *)
+      intros x p k IH K. specialize (IH (M.remove x K)).
+      destruct (cp_fv _ k) as [k' fk]. destruct IH as (-> & Hf).
+      split; [ reflexivity |]. intros z. rewrite (same_iff _ _ z (occurs_free_Eprim_val _ _ _)). fv_simpl.
+      rewrite (Hf z). tauto.
+    - (* Eprim *)
+      intros x p ys k IH K. specialize (IH (M.remove x K)).
+      destruct (cp_fv _ k) as [k' fk]. destruct IH as (-> & Hf).
+      split; [ reflexivity |]. intros z. rewrite (same_iff _ _ z (occurs_free_Eprim _ _ _ _)). fv_simpl.
+      rewrite (Hf z). unfold FromList, Ensembles.In. tauto.
+    - (* Ehalt *)
+      intros x K. split; [ reflexivity |].
+      intros z. rewrite (same_iff _ _ z (occurs_free_Ehalt _)). fv_simpl. tauto.
+    - (* Fcons *)
+      intros f w xs e B IHe IHB K. specialize (IHB K).
+      destruct (cp_fv_fd K B) as [[B' fB] nB]. destruct IHB as (-> & HfB & HnB).
+      destruct (keeps (sel_L Lc) w).
+      + specialize (IHe (param_consts xs [] K)). destruct (cp_fv _ e) as [e' fe]. destruct IHe as (-> & Hfe).
+        split; [ reflexivity | split ].
+        * intros z. rewrite (same_iff _ _ z (occurs_free_fundefs_Fcons _ _ _ _ _)). fv_simpl.
+          rewrite (Hfe z), (HfB z), (HnB z). unfold FromList, Ensembles.In. tauto.
+        * intros z. simpl. fv_simpl. rewrite (HnB z). tauto.
+      + specialize (IHe (param_consts xs (cp_cs Lc w) K)). destruct (cp_fv _ e) as [e' fe]. destruct IHe as (-> & Hfe).
+        pose proof (bind_fv_spec xs (cp_cs Lc w) _ _ Hfe) as Hb.
+        split; [ reflexivity | split ].
+        * intros z. rewrite (same_iff _ _ z (occurs_free_fundefs_Fcons _ _ _ _ _)). fv_simpl.
+          rewrite (Hb z), (HfB z), (HnB z). unfold FromList, Ensembles.In. tauto.
+        * intros z. simpl. fv_simpl. rewrite (HnB z). tauto.
+    - (* Fnil *)
+      intros K. split; [ reflexivity | split ].
+      + intros z. rewrite (same_iff _ _ z occurs_free_fundefs_Fnil).
+        split; [ intros H; apply PS.empty_spec in H; contradiction | intros H; inv H ].
+      + intros z. simpl. split; [ intros H; apply PS.empty_spec in H; contradiction | intros H; inv H ].
+  Qed.
+
+  Lemma cp_fv_fst K e : fst (cp_fv K e) = cp Lc K e.
+  Proof. pose proof (proj1 cp_fv_correct e K) as H. destruct (cp_fv K e) as [e' fe]. apply H. Qed.
+
+End CpFv.
+
 (** * The analysis *)
 
 Definition centry : Type := option (list (option const_info)).
@@ -357,12 +534,12 @@ Proof.
   - eapply cp_ok_empty.
 Qed.
 
-Definition cp_top (e : exp) : exp := cp (choose_map e) (M.empty _) e.
+Definition cp_top (e : exp) : exp := fst (cp_fv (choose_map e) (M.empty _) e).
 
 (** * Correctness of the implementation *)
 
 Theorem cp_top_trans e : trans (choose_map e) (esize e) (M.empty _) (esize e) e (cp_top e).
-Proof. eapply cp_trans; [ eapply choose_map_ok | lia ]. Qed.
+Proof. unfold cp_top. rewrite cp_fv_fst. eapply cp_trans; [ eapply choose_map_ok | lia ]. Qed.
 
 Section Top.
 

@@ -612,6 +612,10 @@ Section Compose.
 
     eapply correct_cc_compose_l.
 
+    rewrite Hwebs. now eapply correct_id_trans.
+
+    eapply correct_cc_compose_l.
+
     destruct (do_lambda_lift opts).
     eapply correct_time. now eapply lambda_lift_correct_corr.
     now eapply correct_id_trans.
