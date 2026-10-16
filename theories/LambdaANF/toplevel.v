@@ -278,6 +278,10 @@ Section IDENT.
                                 | LambdaWeb.ar.Known (Some s) => usable s
                                 | _ => false end in
                  String.concat " " (map (fun n => show_N (N.of_nat n)) (LambdaWeb.fixpoint.why_hist ed cls sel 10)) in
+      let curry := let '(f, d, r, i, l) := LambdaWeb.stats.curry_of e0 in
+                   ("functions " ++ show_N f ++ ", returning a lambda at once " ++ show_N d ++
+                    ", returning a lambda " ++ show_N r ++ ", calls whose result is called at once " ++
+                    show_N i ++ " of " ++ show_N l)%bs in
       let ar_f := match LambdaWeb.ar_impl.ar_fix ed with
                   | (F, La) :: _ => (nw La ++ " " ++ bs (andb (LambdaWeb.ar_impl.La_ok La) (LambdaWeb.ar_impl.ar_ok F La (M.empty _) ed)))%bs
                   | [] => "no solution"%bs end in
@@ -301,7 +305,7 @@ Section IDENT.
                   show_N (LambdaWeb.stats.n_param (LambdaWeb.stats.stats_of ea)) ++
                   ", arguments " ++ show_N (LambdaWeb.stats.n_arg (LambdaWeb.stats.stats_of ed)) ++ " -> " ++
                   show_N (LambdaWeb.stats.n_arg (LambdaWeb.stats.stats_of ea)) ++
-                  " [PASSES] AR fixpoint: " ++ ar_f ++ ", escape reasons (constr prim halt plain untracked called known-unshaped known-unflattenable known-flattenable flat): " ++ why ++
+                  " [PASSES] currying: " ++ curry ++ "; AR fixpoint: " ++ ar_f ++ ", escape reasons (constr prim halt plain untracked called known-unshaped known-unflattenable known-flattenable flat): " ++ why ++
                   "; AR " ++ pp sd sa ++ "; DPE fixpoint: " ++ dpe_f ++ "; DPE " ++ pp sa s1 ++
                   "; CP fixpoint: " ++ cp_f ++ ", candidates by round 1/2/3: " ++ cp_c 1%nat ++ ", " ++ cp_c 2%nat ++ ", " ++ cp_c 3%nat ++
                   "; CP " ++ pp s1 sw)%bs in
