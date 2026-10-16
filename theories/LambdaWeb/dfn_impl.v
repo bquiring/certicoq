@@ -716,15 +716,16 @@ Section Analysis.
                  | None => WM.set w tt acc
                  end) inner_funs bad0.
 
-  Definition is_bad (w : web) : bool := match WM.get w bad with Some _ => true | None => false end.
+  Definition is_bad (b : WM.t unit) (w : web) : bool := match WM.get w b with Some _ => true | None => false end.
 
   Definition tag_base : positive := Pos.succ (max_pos (map fst (M.elements cenv))).
   Definition ind_base : positive := Pos.succ (max_pos (map (fun p => term.ctor_ind_tag (snd p)) (M.elements cenv))).
 
   (** Tags of the wrappers and lambda sets *)
   Definition assign : M.t ctor_tag * WM.t (list ctor_tag) * positive :=
+    let b := bad in
     fold_left (fun '(tagof, L, c) '(f, w, xs, e) =>
-                 if is_bad w then (tagof, L, c)
+                 if is_bad b w then (tagof, L, c)
                  else match tagof ! f, code_of xs e with
                       | None, Some _ =>
                           (M.set f c tagof,
@@ -741,13 +742,15 @@ Section Analysis.
   Definition escaping : PS.t :=
     fold_left (fun acc e => PS.union (esc_vars e) acc) (fd_bodies Btop) (esc_vars e0).
 
-  Definition worth (tagof : M.t ctor_tag) (lams : list ctor_tag) : bool :=
-    Nat.leb 2 (length lams) && Nat.leb (length lams) max_ctors &&
-    existsb (fun '(f, c) => PS.mem f escaping && existsb (Pos.eqb c) lams) (M.elements tagof).
+  (** [esc]: the tags of the escaping functions *)
+  Definition worth (esc : PS.t) (lams : list ctor_tag) : bool :=
+    Nat.leb 2 (length lams) && Nat.leb (length lams) max_ctors && existsb (fun c => PS.mem c esc) lams.
 
   Definition assign_sel : M.t ctor_tag * WM.t (list ctor_tag) * positive :=
     let '(tagof, L, c) := assign in
-    (tagof, fold_left (fun acc '(w, lams) => if worth tagof lams then WM.set w lams acc else acc)
+    let ef := escaping in
+    let esc := fold_left (fun acc '(f, c) => if PS.mem f ef then PS.add c acc else acc) (M.elements tagof) PS.empty in
+    (tagof, fold_left (fun acc '(w, lams) => if worth esc lams then WM.set w lams acc else acc)
                       (WM_elements L) (WM.empty _), c).
 
   Definition inner_bundles : list fundefs :=
