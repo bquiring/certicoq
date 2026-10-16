@@ -736,15 +736,16 @@ Section Analysis.
 
   (** ** Heuristics: which webs to defunctionalize
 
-      A web is worth defunctionalizing if it has at least two functions and
-      one of them escapes (it occurs other than as the function of a call):
-      otherwise every call is to a known function. *)
+      A web is worth defunctionalizing if one of its functions escapes (it
+      occurs other than as the function of a call): otherwise every call is to
+      a known function.  A web with a single function is worth it too: its
+      closures become records, and its calls direct calls. *)
   Definition escaping : PS.t :=
     fold_left (fun acc e => PS.union (esc_vars e) acc) (fd_bodies Btop) (esc_vars e0).
 
   (** [esc]: the tags of the escaping functions *)
   Definition worth (esc : PS.t) (lams : list ctor_tag) : bool :=
-    Nat.leb 2 (length lams) && Nat.leb (length lams) max_ctors && existsb (fun c => PS.mem c esc) lams.
+    Nat.leb 1 (length lams) && Nat.leb (length lams) max_ctors && existsb (fun c => PS.mem c esc) lams.
 
   Definition assign_sel : M.t ctor_tag * WM.t (list ctor_tag) * positive :=
     let '(tagof, L, c) := assign in
